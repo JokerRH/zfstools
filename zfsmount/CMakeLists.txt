@@ -14,6 +14,7 @@ target_compile_definitions( zfsmount
 	PRIVATE
 		POOL_NAME=${POOL_NAME}
 		POOL_ID=${POOL_ID}ull
+		POOL_VDEVS=${POOL_VDEVS}
 		"KEY_WRAPPED={${KEY_WRAPPED_BYTES}}"
 )
 

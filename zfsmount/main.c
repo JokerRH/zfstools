@@ -30,7 +30,7 @@ int main( int argc, char *argv[ ] )
 		goto ERROR_AFTER_INIT;
 	}
 
-	if( !ImportPool( fdZFS, "/dev/sda1\0/dev/sdb1\0/dev/sdc1\0/dev/sdd1\0", XSTR( POOL_NAME ), POOL_ID ) )
+	if( !ImportPool( fdZFS, XSTR( POOL_VDEVS ), XSTR( POOL_NAME ), POOL_ID ) )
 		goto ERROR_AFTER_FD;
 
 	if( !LoadPoolKey( XSTR( POOL_NAME ), g_ymmKey ) )	
