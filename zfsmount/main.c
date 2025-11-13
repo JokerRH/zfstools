@@ -10,10 +10,11 @@
 #define STR( a ) #a
 
 static block256_t g_ymmKey = { KEY_WRAPPED };
+static const pem_t g_PEM = { PEM };
 
 int main( int argc, char *argv[ ] )
 {
-	if( !LoadKey( &g_ymmKey ) )
+	if( !LoadKey( &g_ymmKey, &g_PEM, ID_KEY ) )
 		return EXIT_FAILURE;
 
 	if( libzfs_core_init( ) )

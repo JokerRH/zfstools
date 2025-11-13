@@ -1,15 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
-#include <termios.h>
 #include <ctype.h>
 #include <string.h>
-#include <linux/prctl.h>
-#include <sys/prctl.h>
-#include <sys/stat.h>
-#include <sys/sysmacros.h>
-#include <sys/types.h>
-#include <dirent.h>
 #include <errno.h>
 #include <signal.h>
 #include <fcntl.h>
@@ -19,8 +11,18 @@
 #include <smmintrin.h>
 #include "loadkey.h"
 
-static unsigned char g_idKey[ 1 ] = { ID_KEY };
-static unsigned char g_abPEM[ 65 ] = PEM;
+#ifdef WIN32
+#	include <Windows.h>
+#else
+#	include <unistd.h>
+#	include <termios.h>
+#	include <linux/prctl.h>
+#	include <sys/prctl.h>
+#	include <sys/stat.h>
+#	include <sys/sysmacros.h>
+#	include <sys/types.h>
+#	include <dirent.h>
+#endif
 
 #define USB_DEV_ROOT	"/sys/bus/usb/devices/"
 #define USB_DEV_NODE	"/dev/bus/usb/"
@@ -29,8 +31,58 @@ static unsigned char g_abPEM[ 65 ] = PEM;
 #define XMMLO( ymm )	( ( (__m128i *) &( ymm ) )[ 0 ] )
 #define XMMHI( ymm )	( ( (__m128i *) &( ymm ) )[ 1 ] )
 
-static unsigned ReadPIN( char pin[ 8 ] )
+unsigned ReadPIN( char pin[ 8 ] )
 {
+#ifdef WIN32
+	const HANDLE hStdin = GetStdHandle( STD_INPUT_HANDLE );
+
+	//Save original console mode
+	DWORD dwMode;
+	GetConsoleMode( hStdin, &dwMode );
+	const DWORD dwPreviousMode = dwMode;
+
+	// Disable line input and echo
+	dwMode &= ~( ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT );
+	SetConsoleMode( hStdin, dwMode );
+
+	fputs( "Enter YubiKey PIN (6-8 digits): ", stdout );
+	fflush( stdout );
+
+	unsigned numDigits = 0;
+	while( true )
+	{
+		INPUT_RECORD ir;
+		DWORD count;
+
+		ReadConsoleInput( hStdin, &ir, 1, &count );
+
+		if( ir.EventType != KEY_EVENT || !ir.Event.KeyEvent.bKeyDown )
+			continue;  //Only process key-down events
+
+		const char c = ir.Event.KeyEvent.uChar.AsciiChar;
+		if( c >= '0' && c <= '9' && numDigits < 8 )
+		{
+			pin[ numDigits++ ] = c;
+			putchar( '*' );
+			fflush( stdout );
+		}
+		else if( ( c == '\r' || c == '\n' ) && numDigits >= 6 )
+		{
+			putchar( '\n' );
+			break;
+		}
+		else if( ir.Event.KeyEvent.wVirtualKeyCode == VK_BACK && numDigits > 0 )
+		{
+			--numDigits;
+			printf( "\b \b" );
+			fflush( stdout );
+		}
+	}
+
+	// Restore original console mode
+	SetConsoleMode( hStdin, dwPreviousMode );
+	return numDigits;
+#else
 	struct termios oldt;
 	{
 		tcgetattr( STDIN_FILENO, &oldt );	//Save original configuration
@@ -71,8 +123,13 @@ static unsigned ReadPIN( char pin[ 8 ] )
 
 	tcsetattr( STDIN_FILENO, TCSANOW, &oldt );
 	return numDigits;
+#endif
 }
 
+#ifndef WIN32
+/*!
+	\brief Searches for a USB device based on Yubico vendor id and creates the corresponding device node for it
+*/
 static bool MakeYubikeyDev( void )
 {
 	DIR *const pDir = opendir( USB_DEV_ROOT );
@@ -215,9 +272,13 @@ ERROR_AFTER_DIR:
 	closedir( pDir );
 	return false;
 }
+#endif
 
 static bool StartPCSCD( void )
 {
+#ifdef WIN32
+	return true;
+#else
 	const pid_t ppid = getpid( );
 	
 	//Fork process to start pcscd
@@ -253,9 +314,10 @@ static bool StartPCSCD( void )
 	//If we reach this point, execve failed. Print error message and exit
 	fputs( "Failed to start pcscd.\n", stderr );
 	_exit( EXIT_FAILURE );
+#endif
 }
 
-static bool LoadKEK( block256_t *pKEK, const CK_UTF8CHAR_PTR abPIN, const size_t numDigits )
+static bool LoadKEK( block256_t *const pKEK, const pem_t *const pPEM, const unsigned char idKey, const CK_UTF8CHAR_PTR abPIN, const size_t numDigits )
 {
 	CK_FUNCTION_LIST_PTR funcs;
 	if( C_GetFunctionList( &funcs ) != CKR_OK )
@@ -315,7 +377,7 @@ static bool LoadKEK( block256_t *pKEK, const CK_UTF8CHAR_PTR abPIN, const size_t
 		{
 			{ CKA_CLASS, &key_class, sizeof( key_class ) },
 			{ CKA_KEY_TYPE, &key_type, sizeof( key_type ) },
-			{ CKA_ID, (CK_VOID_PTR) g_idKey, sizeof( g_idKey ) }
+			{ CKA_ID, (CK_VOID_PTR) &idKey, sizeof( unsigned char ) }
 		};
 
 		if( funcs->C_FindObjectsInit( hSession, key_template, sizeof( key_template ) / sizeof( CK_ATTRIBUTE ) ) != CKR_OK )
@@ -340,8 +402,8 @@ static bool LoadKEK( block256_t *pKEK, const CK_UTF8CHAR_PTR abPIN, const size_t
 		CK_ECDH1_DERIVE_PARAMS ecdh_params =
 		{
 			.kdf = CKD_NULL,
-			.pPublicData = g_abPEM,
-			.ulPublicDataLen = sizeof( g_abPEM )
+			.pPublicData = pPEM->ab,
+			.ulPublicDataLen = sizeof( *pPEM )
 		};
 
 		CK_MECHANISM mech =
@@ -465,15 +527,18 @@ static void Rijndael256_256_EncryptSingle( block256_t *pData, block256_t key )
 	XMMHI( *pData ) = _mm_aesenclast_si128( XMMHI( data ), XMMHI( key ) );
 }
 
-bool LoadKey( block256_t *const pymmKey )
+bool LoadKey( block256_t *const pymmKey, const const pem_t *const pPEM, const unsigned char idKey )
 {
 #ifdef DEBUG_KEY
 	static const block256_t ymmKey = DEBUG_KEY;
 	*pymmKey = ymmKey;
 	return true;
 #else
+
+#ifndef WIN32
 	if( !MakeYubikeyDev( ) )
 		return false;
+#endif
 
 	if( !StartPCSCD( ) )
 		return false;
@@ -482,7 +547,7 @@ bool LoadKey( block256_t *const pymmKey )
 	const unsigned numDigits = ReadPIN( pin );
 
 	block256_t ymmKEK;
-	if( !LoadKEK( &ymmKEK, pin, numDigits ) )
+	if( !LoadKEK( &ymmKEK, pPEM, idKey, pin, numDigits ) )
 		return false;
 
 	Rijndael256_256_EncryptSingle( pymmKey, ymmKEK );

@@ -1,10 +1,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <fcntl.h>
-#include <unistd.h>
 #include <loadkey/loadkey.h>
 
+#ifdef WIN32
+#	include <io.h>
+#else
+#	include <unistd.h>
+#endif
+
 static block256_t g_ymmKey = { KEY_WRAPPED };
+static const pem_t g_pem = { PEM };
 
 int main( int argc, char *argv[ ] )
 {
@@ -21,7 +27,7 @@ int main( int argc, char *argv[ ] )
 		return EXIT_FAILURE;
 	}
 
-	if( !LoadKey( &g_ymmKey ) )
+	if( !LoadKey( &g_ymmKey, &g_pem, ID_KEY ) )
 		goto ERROR_AFTER_FILE;
 
 	if( write( fd, g_ymmKey.ab, sizeof( g_ymmKey ) ) != sizeof( g_ymmKey ) )

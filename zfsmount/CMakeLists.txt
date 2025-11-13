@@ -1,3 +1,27 @@
+if( NOT DEFINED POOL_NAME )
+	message( FATAL_ERROR "POOL_NAME not defined" )
+endif( )
+
+if( NOT DEFINED POOL_ID )
+	message( FATAL_ERROR "POOL_ID not defined" )
+endif( )
+
+if( NOT DEFINED POOL_VDEVS )
+	message( FATAL_ERROR "POOL_VDEVS not defined" )
+endif( )
+
+if( NOT DEFINED ID_KEY )
+	message( FATAL_ERROR "ID_KEY not defined" )
+endif( )
+
+if( NOT DEFINED PEM )
+	message( FATAL_ERROR "PEM not defined" )
+endif( )
+
+if( NOT DEFINED KEY_WRAPPED )
+	message( FATAL_ERROR "KEY_WRAPPED not defined" )
+endif( )
+
 #
 # zfsmount executable
 #
@@ -15,6 +39,8 @@ target_compile_definitions( zfsmount
 		POOL_NAME=${POOL_NAME}
 		POOL_ID=${POOL_ID}ull
 		POOL_VDEVS=${POOL_VDEVS}
+		ID_KEY=0x${ID_KEY}
+		"PEM={${PEM_BYTES}}"
 		"KEY_WRAPPED={${KEY_WRAPPED_BYTES}}"
 )
 

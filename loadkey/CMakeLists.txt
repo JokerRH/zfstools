@@ -1,27 +1,6 @@
 #
 # Process inputs
 #
-if( NOT DEFINED ID_KEY )
-	message( FATAL_ERROR "ID_KEY not defined" )
-endif( )
-
-if( NOT DEFINED PEM )
-	message( FATAL_ERROR "PEM not defined" )
-else( )
-	# Convert PEM string into a C array initializer
-	string( LENGTH "${PEM}" PEM_LEN )
-
-	set( PEM_BYTES "" )
-	math( EXPR MAX_INDEX "${PEM_LEN}-2" )
-	foreach( I RANGE 0 ${MAX_INDEX} 2 )
-		string( SUBSTRING "${PEM}" ${I} 2 HEXPAIR )
-		set( PEM_BYTES "${PEM_BYTES}0x${HEXPAIR}, " )
-	endforeach( )
-
-	# Remove trailing comma+space
-	string( REGEX REPLACE ", $" "" PEM_BYTES "${PEM_BYTES}" )
-endif( )
-
 if( DEFINED DEBUG_KEY )
 	# Convert DEBUG_KEY string into a C array initializer
 	string( LENGTH "${DEBUG_KEY}" DEBUG_KEY_LEN )
@@ -62,12 +41,6 @@ target_sources( loadkey
 )
 
 target_link_libraries( loadkey PRIVATE PkgConfig::YKCS11 )
-
-target_compile_definitions( loadkey
-	PRIVATE
-		ID_KEY=0x${ID_KEY}
-		"PEM={${PEM_BYTES}}"
-)
 
 if( DEFINED DEBUG_KEY )
 	target_compile_definitions( loadkey PRIVATE "DEBUG_KEY={${DEBUG_KEY_BYTES}}" )
