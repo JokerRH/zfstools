@@ -41,6 +41,14 @@ if( DEFINED KEY_WRAPPED )
 	string( REGEX REPLACE ", $" "" KEY_WRAPPED_BYTES "${KEY_WRAPPED_BYTES}" )
 endif( )
 
+if( DEFINED POOL_VDEVS )
+	# Convert ":" -> "\0"
+	set( VDEV_STRING "${POOL_VDEVS}" )
+	string( REPLACE ":" "\\0" VDEV_STRING "${VDEV_STRING}" )
+	# Add the final NULL terminator
+	set( VDEV_STRING "${VDEV_STRING}\\0" )
+endif( )
+
 if( WITH_LOADKEY )
 	add_subdirectory( loadkey )
 endif( )

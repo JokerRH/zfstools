@@ -10,6 +10,7 @@
 #include <emmintrin.h>
 #include <smmintrin.h>
 #include "loadkey.h"
+#include "logging.h"
 
 #ifdef WIN32
 #	include <Windows.h>
@@ -135,7 +136,7 @@ static bool MakeYubikeyDev( void )
 	DIR *const pDir = opendir( USB_DEV_ROOT );
 	if( !pDir )
 	{
-		fputs( "Failed to open usb sys device folder.\n", stderr );
+		syslog( LOG_ERR, "Failed to open usb sys device folder." );
 		return false;
 	}
 
@@ -151,7 +152,7 @@ static bool MakeYubikeyDev( void )
 			const int numChars = snprintf( szPath, sizeof( szPath ), USB_DEV_ROOT "%s/idVendor", pEntry->d_name );
 			if( numChars < 0 || numChars >= sizeof( szPath ) )
 			{
-				fputs( "Failed to format usb vendor path. Skipping device.\n", stderr );
+				syslog( LOG_WARNING, "Failed to format usb vendor path. Skipping device." );
 				continue;
 			}
 
@@ -169,14 +170,14 @@ static bool MakeYubikeyDev( void )
 				if( !fgets( abVendor, sizeof( abVendor ), f ) )
 				{
 					fclose( f );
-					fputs( "Failed to read usb vendor file. Skipping device.\n", stderr );
+					syslog( LOG_WARNING, "Failed to read usb vendor file. Skipping device." );
 					continue;
 				}
 				
 				if( feof( f ) )
 				{
 					fclose( f );
-					fputs( "Reached end-of-file while reading usb vendor file. Skipping device.\n", stderr );
+					syslog( LOG_WARNING, "Reached end-of-file while reading usb vendor file. Skipping device." );
 					continue;
 				}
 
@@ -194,13 +195,13 @@ static bool MakeYubikeyDev( void )
 			f = fopen( szPath, "r" );
 			if( !f )
 			{
-				fputs( "Failed to open busnum of Yubico device. Skipping device.\n", stderr );
+				syslog( LOG_WARNING, "Failed to open busnum of Yubico device. Skipping device." );
 				continue;
 			}
 
 			if( fscanf( f, "%d", &busnum ) == EOF )
 			{
-				fputs( "Failed to read busnum of Yubico device. Skipping device.\n", stderr );
+				syslog( LOG_WARNING, "Failed to read busnum of Yubico device. Skipping device." );
 				fclose( f );
 				continue;
 			}
@@ -215,13 +216,13 @@ static bool MakeYubikeyDev( void )
 			f = fopen( szPath, "r" );
 			if( !f )
 			{
-				fputs( "Failed to open devnum of Yubico device. Skipping device.\n", stderr );
+				syslog( LOG_WARNING, "Failed to open devnum of Yubico device. Skipping device." );
 				continue;
 			}
 
 			if( fscanf( f, "%d", &devnum ) == EOF )
 			{
-				fputs( "Failed to read devnum of Yubico device. Skipping device.\n", stderr );
+				syslog( LOG_WARNING, "Failed to read devnum of Yubico device. Skipping device." );
 				fclose( f );
 				continue;
 			}
@@ -236,12 +237,12 @@ static bool MakeYubikeyDev( void )
 		const int numBusChars = snprintf( szPath, sizeof( szPath ), USB_DEV_NODE "%03d", busnum );
 		if( numBusChars < 0 || numBusChars >= sizeof( szPath ) )
 		{
-			fputs( "Failed to format device bus path.\n", stderr );
+			syslog( LOG_ERR, "Failed to format device bus path." );
 			goto ERROR_AFTER_DIR;
 		}
 		if( mkdir( szPath, 0755 ) && errno != EEXIST )
 		{
-			fputs( "Failed to create device bus path.\n", stderr );
+			syslog( LOG_ERR, "Failed to create device bus path." );
 			goto ERROR_AFTER_DIR;
 		}
 
@@ -250,7 +251,7 @@ static bool MakeYubikeyDev( void )
 			const int numChars = snprintf( szPath + numBusChars, sizeof( szPath ) - numBusChars, "/%03d", devnum );
 			if( numChars < 0 || numChars >= sizeof( szPath ) - numBusChars )
 			{
-				fputs( "Failed to format device node path.\n", stderr );
+				syslog( LOG_ERR, "Failed to format device node path." );
 				goto ERROR_AFTER_DIR;
 			}
 		}
@@ -258,7 +259,7 @@ static bool MakeYubikeyDev( void )
 		umask( 0000 );
 		if( mknod( szPath, S_IFCHR | 0666, makedev( idMajor, idMinor ) ) && errno != EEXIST )
 		{
-			fprintf( stderr, "Failed to create device node \"%s\".\n", szPath );
+			syslog( LOG_ERR, "Failed to create device node \"%s\".", szPath );
 			goto ERROR_AFTER_DIR;
 		}
 
@@ -266,7 +267,7 @@ static bool MakeYubikeyDev( void )
 		return true;
 	}
 
-	fputs( "Failed to find a connected yubikey.\n", stderr );
+	syslog( LOG_ERR, "Failed to find a connected yubikey." );
 
 ERROR_AFTER_DIR:
 	closedir( pDir );
@@ -286,7 +287,7 @@ static bool StartPCSCD( void )
 		const pid_t pid = fork( );
 		if( pid < 0 )
 		{
-			fputs( "Failed to fork process.\n", stderr );
+			syslog( LOG_ERR, "Failed to fork process." );
 			return false;
 		}
 		if( pid )
@@ -298,7 +299,7 @@ static bool StartPCSCD( void )
 	{
 		if( prctl( PR_SET_PDEATHSIG, SIGTERM ) )
 		{
-			fputs( "Failed to set parent-death signal.\n", stderr );
+			syslog( LOG_ERR, "Failed to set parent-death signal." );
 			_exit( EXIT_FAILURE );
 		}
 
@@ -312,7 +313,7 @@ static bool StartPCSCD( void )
 	(void)! execve( "/sbin/pcscd", s_aszArg, s_aszNullEnvP );
 
 	//If we reach this point, execve failed. Print error message and exit
-	fputs( "Failed to start pcscd.\n", stderr );
+	syslog( LOG_ERR, "Failed to start pcscd." );
 	_exit( EXIT_FAILURE );
 #endif
 }
@@ -322,13 +323,13 @@ static bool LoadKEK( block256_t *const pKEK, const pem_t *const pPEM, const unsi
 	CK_FUNCTION_LIST_PTR funcs;
 	if( C_GetFunctionList( &funcs ) != CKR_OK )
 	{
-		fprintf( stderr, "Failed to load ykcs11 function list.\n" );
+		syslog( LOG_ERR, "Failed to load ykcs11 function list." );
 		return false;
 	}
 
 	if( funcs->C_Initialize( NULL ) != CKR_OK )
 	{
-		fprintf( stderr, "Failed to initialize ykcs11.\n" );
+		syslog( LOG_ERR, "Failed to initialize ykcs11." );
 		return false;
 	}
 
@@ -342,29 +343,29 @@ static bool LoadKEK( block256_t *const pKEK, const pem_t *const pPEM, const unsi
 		case CKR_OK:
 			break;
 		case CKR_BUFFER_TOO_SMALL:
-			fprintf( stderr, "More than one ykcs11 slot found. Please ensure only one is present.\n" );
+			syslog( LOG_ERR, "More than one ykcs11 slot found. Please ensure only one is present." );
 			goto ERROR_AFTER_INIT;
 		default:
-			fprintf( stderr, "Failed to fetch ykcs11 slot.\n" );
+			syslog( LOG_ERR, "Failed to fetch ykcs11 slot." );
 			goto ERROR_AFTER_INIT;
 		}
 		
 		if( !numSlots )
 		{
-			fprintf( stderr, "No ykcs11 slot available.\n" );
+			syslog( LOG_ERR, "No ykcs11 slot available." );
 			goto ERROR_AFTER_INIT;
 		}
 
 		if( funcs->C_OpenSession( idSlot, CKF_SERIAL_SESSION | CKF_RW_SESSION, NULL, NULL, &hSession ) != CKR_OK )
 		{
-			fprintf( stderr, "Failed to open ykcs11 session.\n" );
+			syslog( LOG_ERR, "Failed to open ykcs11 session." );
 			goto ERROR_AFTER_INIT;
 		}
 	}
 
 	if( funcs->C_Login( hSession, CKU_USER, abPIN, numDigits ) != CKR_OK )
 	{
-		fprintf( stderr, "Failed to login in ykcs11 session.\n" );
+		syslog( LOG_ERR, "Failed to login in ykcs11 session." );
 		goto ERROR_AFTER_SESSION;
 	}
 
@@ -382,14 +383,14 @@ static bool LoadKEK( block256_t *const pKEK, const pem_t *const pPEM, const unsi
 
 		if( funcs->C_FindObjectsInit( hSession, key_template, sizeof( key_template ) / sizeof( CK_ATTRIBUTE ) ) != CKR_OK )
 		{
-			fprintf( stderr, "Failed to find private key.\n" );
+			syslog( LOG_ERR, "Failed to find private key." );
 			goto ERROR_AFTER_LOGIN;
 		}
 
 		CK_ULONG numFound;
 		if( funcs->C_FindObjects( hSession, &hKeyPrivate, 1, &numFound ) != CKR_OK || numFound != 1 )
 		{
-			fprintf( stderr, "Failed to find private key.\n" );
+			syslog( LOG_ERR, "Failed to find private key." );
 			goto ERROR_AFTER_LOGIN;
 		}
 
@@ -402,7 +403,7 @@ static bool LoadKEK( block256_t *const pKEK, const pem_t *const pPEM, const unsi
 		CK_ECDH1_DERIVE_PARAMS ecdh_params =
 		{
 			.kdf = CKD_NULL,
-			.pPublicData = pPEM->ab,
+			.pPublicData = (char *) pPEM->ab,
 			.ulPublicDataLen = sizeof( *pPEM )
 		};
 
@@ -424,7 +425,7 @@ static bool LoadKEK( block256_t *const pKEK, const pem_t *const pPEM, const unsi
 
 		if( funcs->C_DeriveKey( hSession, &mech, hKeyPrivate, derived_tmpl, sizeof( derived_tmpl ) / sizeof( CK_ATTRIBUTE ), &hDerived ) != CKR_OK )
 		{
-			fprintf( stderr, "Failed to derive KEK.\n" );
+			syslog( LOG_ERR, "Failed to derive KEK." );
 			goto ERROR_AFTER_LOGIN;
 		}
 	}
@@ -433,7 +434,7 @@ static bool LoadKEK( block256_t *const pKEK, const pem_t *const pPEM, const unsi
 		CK_ATTRIBUTE attr = { CKA_VALUE, pKEK->ab, sizeof( block256_t ) };
 		if( funcs->C_GetAttributeValue( hSession, hDerived, &attr, sizeof( attr ) / sizeof( CK_ATTRIBUTE ) ) )
 		{
-			fprintf( stderr, "Failed to extract KEK.\n" );
+			syslog( LOG_ERR, "Failed to extract KEK." );
 			goto ERROR_AFTER_LOGIN;
 		}
 	}

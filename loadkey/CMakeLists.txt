@@ -40,6 +40,7 @@ target_sources( loadkey
 		${CMAKE_CURRENT_SOURCE_DIR}/loadkey.c
 )
 
+target_include_directories( loadkey PRIVATE ${CMAKE_SOURCE_DIR}/shared )
 target_link_libraries( loadkey PRIVATE PkgConfig::YKCS11 )
 
 if( DEFINED DEBUG_KEY )

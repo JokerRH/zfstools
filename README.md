@@ -28,6 +28,7 @@ Example cmake option: -DDEBUG_KEY=DEADBEEFADECAFC0FFEEDEFACEDECADE00010203050607
 
 ## Library zfstools
 This library provides functions to import a ZFS pool, load required keys and mount the contained datasets. It is purely based on libzfs_core.
+Note that libzfs_core does not normally provide the zfs_cmd_t struct needed for ioctl commands to /dev/zfs. zfstools expects this struct in a header file called zfs_cmd.h. You will need to create this manually by copying in the zfs_cmd_t struct from zfs/include/sys/zfs_ioctl.h (or find a way to include that header without messing up your build system).
 ## Executable keysetup
 This is a helper executable that can provide you the public key in PEM format (65 byte), as well as wrap or unwrap keys. The output of this tool is needed for zfsmount and writekey.
 Run it without arguments to get an argument overview. When running with arguments, you will need your YubiKey.
@@ -43,8 +44,9 @@ Example cmake option: -DPOOL_NAME=data
 The ID of the pool to be imported
 Example cmake option: -DPOOL_ID=12345
 ### POOL_VDEVS
-The VDevs to be scanned for the pool. VDevs must be terminated using '\0'.
-Example cmake option: -DPOOL_VDEVS=/dev/sda1\0/dev/sdb1\0/dev/sdc1\0/dev/sdd1\0
+The VDevs to be scanned for the pool. VDevs must be separated using ':'.
+Example cmake option: -DPOOL_VDEVS=/dev/sda1:/dev/sdb1:/dev/sdc1:/dev/sdd1
+Note that internally, vdevs are terminated using individual '\0' characters, with a double '\0' terminating the string.
 ### ID_KEY
 This is the id that identifies the certificate slot. It is **not** matching the labeling you'll find listed by Yubico applications. Instead, these are mapped as follows:
 9a -> 01

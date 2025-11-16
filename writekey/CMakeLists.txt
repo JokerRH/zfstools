@@ -20,6 +20,7 @@ target_sources( writekey
 		${CMAKE_CURRENT_SOURCE_DIR}/main.c
 )
 
+target_include_directories( writekey PRIVATE ${CMAKE_SOURCE_DIR}/shared )
 target_link_libraries( writekey PRIVATE loadkey )
 target_compile_definitions( writekey
 	PRIVATE

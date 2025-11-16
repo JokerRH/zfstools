@@ -11,6 +11,7 @@
 #include <ykpiv/pkcs11y.h>
 #include <loadkey/loadkey.h>
 #include "Rijndael.h"
+#include "logging.h"
 
 #ifndef WIN32
 #	define stricmp	strcasecmp
@@ -104,7 +105,7 @@ static bool LoadECPoint( unsigned char abPoint[ 67 ], const char *const abPIN, c
 
 	if( ecPointAttr.ulValueLen != 67 )
 	{
-		fprintf( stderr, "EC point attribute has length %u. Expected was 67.\n", ecPointAttr.ulValueLen );
+		fprintf( stderr, "EC point attribute has length %lu. Expected was 67.\n", ecPointAttr.ulValueLen );
 		goto ERROR_AFTER_LOGIN;
 	}
 
@@ -246,7 +247,7 @@ static bool LoadKEK_PEM( block256_t *const pKEK, const unsigned char idKey, cons
 
 	if( ecPointAttr.ulValueLen != 67 )
 	{
-		fprintf( stderr, "EC point attribute has length %u. Expected was 67.\n", ecPointAttr.ulValueLen );
+		fprintf( stderr, "EC point attribute has length %lu. Expected was 67.\n", ecPointAttr.ulValueLen );
 		goto ERROR_AFTER_LOGIN;
 	}
 
@@ -339,6 +340,9 @@ static bool ReadKey( block256_t *const ymmKey, const char *sz )
 
 int main( int argc, char *argv[ ] )
 {
+	//Initialize syslog for loadkey
+	openlog( "keysetup", LOG_CONS | LOG_PERROR, LOG_USER );
+
 	if( argc < 3 )
 	{
 		fputs( "Insufficient arguments. ", stderr );
@@ -424,5 +428,10 @@ PRINT_ARGS:
 		}
 	}
 
+	closelog( );
 	return EXIT_SUCCESS;
+
+ERROR_AFTER_LOG:
+	closelog( );
+	return EXIT_FAILURE;
 }

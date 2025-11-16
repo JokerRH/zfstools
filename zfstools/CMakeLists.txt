@@ -2,7 +2,6 @@
 # zfstools library
 #
 
-
 add_library( zfstools STATIC )
 add_library( zfstools::zfstools ALIAS zfstools )
 

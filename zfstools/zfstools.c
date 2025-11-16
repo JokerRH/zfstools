@@ -8,16 +8,20 @@
 #include <aio.h>
 #include <assert.h>
 #include <zfs_cmd.h>
+#include <syslog.h>
 
 #define	VDEV_LABELS			4
 #define	VDEV_PHYS_SIZE		( 112 << 10 )
 #define	VDEV_PAD_SIZE		( 8 << 10 )
 #define	VDEV_UBERBLOCK_RING	( 128 << 10 )
-#define	P2ALIGN_TYPED( x, align, type )	( (type) ( x ) & -(type) ( align ) )
-#define	PAGESIZE	( spl_pagesize( ) )
+
 #define	ZEC_MAGIC	0x210da7ab10c7a11ULL
+
+#define	P2ALIGN_TYPED( x, align, type )	( (type) ( x ) & -(type) ( align ) )
+#define	PAGESIZE						( spl_pagesize( ) )
+
 #define	CONFIG_BUF_MINSIZE	262144
-#define MNTTYPE_ZFS	"zfs"
+#define MNTTYPE_ZFS			"zfs"
 
 #ifdef __FreeBSD__
 #	define PROP_ZONED	"jailed"
@@ -130,7 +134,7 @@ static bool LoadVDevConfigs( const char *const szzVDevs, const char *const szPoo
 	{
 		if( posix_memalign( (void **) &aLabels, PAGESIZE, numVDevs * VDEV_LABELS * sizeof( vdev_label_t ) ) )
 		{
-			fprintf( stderr, "[Error] Failed to allocate memory for vdev labels.\n" );
+			syslog( LOG_ERR, "Failed to allocate memory for vdev labels." );
 			return NULL;
 		}
 
@@ -149,7 +153,7 @@ static bool LoadVDevConfigs( const char *const szzVDevs, const char *const szPoo
 				struct stat64 statbuf;
 				if( stat64( szVDev, &statbuf ) != 0 || ( !S_ISREG( statbuf.st_mode ) && !S_ISBLK( statbuf.st_mode ) ) || ( S_ISREG( statbuf.st_mode ) && statbuf.st_size < SPA_MINDEVSIZE ) )
 				{
-					fprintf( stderr, "Invalid device \"%s\".\n", szVDev );
+					syslog( LOG_ERR, "Invalid device \"%s\".", szVDev );
 					goto ERROR_WHILE_OPENING;
 				}
 
@@ -159,7 +163,7 @@ static bool LoadVDevConfigs( const char *const szzVDevs, const char *const szPoo
 					*(int *) &fd = open( szVDev, O_RDONLY | O_CLOEXEC );
 				if( fd < 0 )
 				{
-					fprintf( stderr, "Failed to open vdev \"%s\".\n", szVDev );
+					syslog( LOG_ERR, "Failed to open vdev \"%s\".", szVDev );
 
 ERROR_WHILE_OPENING:
 					//Close already opened file descriptors
@@ -173,7 +177,7 @@ ERROR_WHILE_OPENING:
 				//Fetch the size of the vdev
 				if( ioctl( fd, BLKGETSIZE64, &statbuf.st_size ) )
 				{
-					fprintf( stderr, "Failed to get blocksize for device \"%s\".\n", szVDev );
+					syslog( LOG_ERR, "Failed to get blocksize for device \"%s\".", szVDev );
 					close( fd );
 					goto ERROR_WHILE_OPENING;
 				}
@@ -200,7 +204,7 @@ ERROR_WHILE_OPENING:
 		//Perform the io operations
 		if( lio_listio( LIO_WAIT, aiocbps, numVDevs * ( VDEV_LABELS / 2 ), NULL ) )
 		{
-			fprintf( stderr, "[Error] Failed to fetch vdev labels.\n" );
+			syslog( LOG_ERR, "Failed to fetch vdev labels." );
 			if( errno == EAGAIN || errno == EINTR || errno == EIO )
 			{
 				//A portion of the requests may have been submitted. Clean them up.
@@ -245,7 +249,7 @@ ERROR_WHILE_OPENING:
 		const nvlist_t *nvl = anvl[ uVDev ] = VDevUnpackConfig( &aiocbs[ uVDev * 2 ] );
 		if( !nvl )
 		{
-			fprintf( stderr, "[Warning] Failed to unpack vdev config for \"%s\".\n", GetVDevName( szzVDevs, uVDev ) );
+			syslog( LOG_WARNING, "Failed to unpack vdev config for \"%s\".", GetVDevName( szzVDevs, uVDev ) );
 			continue;
 		}
 
@@ -254,13 +258,13 @@ ERROR_WHILE_OPENING:
 			uint64_t eState;
 			if( nvlist_lookup_uint64( nvl, "state", &eState ) )
 			{
-				fprintf( stderr, "[Error] Failed to lookup vdev state for \"%s\".\n", GetVDevName( szzVDevs, uVDev ) );
+				syslog( LOG_ERR, "Failed to lookup vdev state for \"%s\".", GetVDevName( szzVDevs, uVDev ) );
 				goto ERROR_WHILE_UNPACKING;
 			}
 
 			if( eState == POOL_STATE_SPARE || eState == POOL_STATE_L2CACHE )
 			{
-				fprintf( stderr, "[Error] VDev state for \"%s\" indicates a Spare or L2Cache drive.\n", GetVDevName( szzVDevs, uVDev ) );
+				syslog( LOG_ERR, "VDev state for \"%s\" indicates a Spare or L2Cache drive.", GetVDevName( szzVDevs, uVDev ) );
 				goto ERROR_WHILE_UNPACKING;
 			}
 		}
@@ -270,13 +274,13 @@ ERROR_WHILE_OPENING:
 			const char *szVDevPool;
 			if( nvlist_lookup_string( nvl, "name", &szVDevPool ) )
 			{
-				fprintf( stderr, "[Error] Failed to lookup vdev name for \"%s\".\n", GetVDevName( szzVDevs, uVDev ) );
+				syslog( LOG_ERR, "Failed to lookup vdev name for \"%s\".", GetVDevName( szzVDevs, uVDev ) );
 				goto ERROR_WHILE_UNPACKING;
 			}
 
 			if( strcmp( szPool, szVDevPool ) )
 			{
-				fprintf( stderr, "[Error] VDev \"%s\" is a member of pool \"%s\", not \"%s\".\n", GetVDevName( szzVDevs, uVDev ), szVDevPool, szPool );
+				syslog( LOG_ERR, "VDev \"%s\" is a member of pool \"%s\", not \"%s\".", GetVDevName( szzVDevs, uVDev ), szVDevPool, szPool );
 				goto ERROR_WHILE_UNPACKING;
 			}
 		}
@@ -286,13 +290,13 @@ ERROR_WHILE_OPENING:
 			uint64_t idVDevPool;
 			if( nvlist_lookup_uint64( nvl, "pool_guid", &idVDevPool ) )
 			{
-				fprintf( stderr, "[Error] Failed to lookup vdev pool_guid for \"%s\".\n", GetVDevName( szzVDevs, uVDev ) );
+				syslog( LOG_ERR, "Failed to lookup vdev pool_guid for \"%s\".", GetVDevName( szzVDevs, uVDev ) );
 				goto ERROR_WHILE_UNPACKING;
 			}
 
 			if( idPool != idVDevPool )
 			{
-				fprintf( stderr, "[Error] VDev \"%s\" is a member of pool with id %" PRIu64 ", not %" PRIu64 ".\n", GetVDevName( szzVDevs, uVDev ), idVDevPool, idPool );
+				syslog( LOG_ERR, "VDev \"%s\" is a member of pool with id %" PRIu64 ", not %" PRIu64 ".", GetVDevName( szzVDevs, uVDev ), idVDevPool, idPool );
 				goto ERROR_WHILE_UNPACKING;
 			}
 		}
@@ -336,7 +340,7 @@ static nvlist_t *LoadPoolConfig( const char *const szzVDevs, const char *const s
 	} *aTlVDev = calloc( numAllocated, sizeof( struct tlvdev_s ) );
 	if( !aTlVDev )
 	{
-		fprintf( stderr, "[Error] Failed to allocate memory for top-level vdev list.\n" );
+		syslog( LOG_ERR, "Failed to allocate memory for top-level vdev list." );
 		goto ERROR_AFTER_VDEV;
 	}
 
@@ -354,14 +358,14 @@ static nvlist_t *LoadPoolConfig( const char *const szzVDevs, const char *const s
 		nvlist_t *nvl;
 		if( nvlist_lookup_nvlist( anvlRedundant[ uVDev ], ZPOOL_CONFIG_VDEV_TREE, &nvl ) )
 		{
-			fprintf( stderr, "[Error] Failed to lookup vdev_tree for \"%s\".\n", GetVDevName( szzVDevs, uVDev ) );
+			syslog( LOG_ERR, "Failed to lookup vdev_tree for \"%s\".", GetVDevName( szzVDevs, uVDev ) );
 			goto ERROR_AFTER_TLVDEV;
 		}
 
 		uint64_t idChild;
 		if( nvlist_lookup_uint64( nvl, "id", &idChild ) )
 		{
-			fprintf( stderr, "[Error] Failed to lookup vdev child id for \"%s\".\n", GetVDevName( szzVDevs, uVDev ) );
+			syslog( LOG_ERR, "Failed to lookup vdev child id for \"%s\".", GetVDevName( szzVDevs, uVDev ) );
 			goto ERROR_AFTER_TLVDEV;
 		}
 
@@ -377,7 +381,7 @@ static nvlist_t *LoadPoolConfig( const char *const szzVDevs, const char *const s
 			struct tlvdev_s *const p = realloc( aTlVDev, numAllocated * sizeof( struct tlvdev_s ) );
 			if( !p )
 			{
-				fprintf( stderr, "[Error] Failed to allocate memory for top-level vdev list.\n" );
+				syslog( LOG_ERR, "Failed to allocate memory for top-level vdev list." );
 				goto ERROR_AFTER_TLVDEV;
 			}
 
@@ -389,7 +393,7 @@ static nvlist_t *LoadPoolConfig( const char *const szzVDevs, const char *const s
 		uint64_t uTxg;
 		if( nvlist_lookup_uint64( anvlRedundant[ uVDev ], ZPOOL_CONFIG_POOL_TXG, &uTxg ) )
 		{
-			fprintf( stderr, "[Error] Failed to lookup vdev txg for \"%s\".\n", GetVDevName( szzVDevs, uVDev ) );
+			syslog( LOG_ERR, "Failed to lookup vdev txg for \"%s\".", GetVDevName( szzVDevs, uVDev ) );
 			goto ERROR_AFTER_TLVDEV;
 		}
 
@@ -426,7 +430,7 @@ static nvlist_t *LoadPoolConfig( const char *const szzVDevs, const char *const s
 	{
 		if( nvlist_alloc( &nvlPool, NV_UNIQUE_NAME, 0 ) )
 		{
-			fprintf( stderr, "[Error] Failed to allocate pool nvlist.\n" );
+			syslog( LOG_ERR, "Failed to allocate pool nvlist." );
 			goto ERROR_AFTER_TLVDEV;
 		}
 		
@@ -435,13 +439,13 @@ static nvlist_t *LoadPoolConfig( const char *const szzVDevs, const char *const s
 			uint64_t uVersion;
 			if( nvlist_lookup_uint64( nvlLatest, ZPOOL_CONFIG_VERSION, &uVersion ) )
 			{
-				fprintf( stderr, "[Error] Failed to retrieve pool version.\n" );
+				syslog( LOG_ERR, "Failed to retrieve pool version." );
 				goto ERROR_AFTER_POOL;
 			}
 
 			if( nvlist_add_uint64( nvlPool, ZPOOL_CONFIG_VERSION, uVersion ) )
 			{
-				fprintf( stderr, "[Error] Failed to copy pool version.\n" );
+				syslog( LOG_ERR, "Failed to copy pool version." );
 				goto ERROR_AFTER_POOL;
 			}
 		}
@@ -450,7 +454,7 @@ static nvlist_t *LoadPoolConfig( const char *const szzVDevs, const char *const s
 		{
 			if( nvlist_add_uint64( nvlPool, ZPOOL_CONFIG_POOL_GUID, idPool ) )
 			{
-				fprintf( stderr, "[Error] Failed to copy pool pool_guid.\n" );
+				syslog( LOG_ERR, "Failed to copy pool pool_guid." );
 				goto ERROR_AFTER_POOL;
 			}
 		}
@@ -459,7 +463,7 @@ static nvlist_t *LoadPoolConfig( const char *const szzVDevs, const char *const s
 		{
 			if( nvlist_add_string( nvlPool, ZPOOL_CONFIG_POOL_NAME, szPool ) )
 			{
-				fprintf( stderr, "[Error] Failed to copy pool name.\n" );
+				syslog( LOG_ERR, "Failed to copy pool name." );
 				goto ERROR_AFTER_POOL;
 			}
 		}
@@ -469,7 +473,7 @@ static nvlist_t *LoadPoolConfig( const char *const szzVDevs, const char *const s
 			const char *szComment;
 			if( !nvlist_lookup_string( nvlLatest, ZPOOL_CONFIG_COMMENT, &szComment ) )
 				if( nvlist_add_string( nvlPool, ZPOOL_CONFIG_COMMENT, szComment ) )
-					fprintf( stderr, "[Warning] Failed to copy pool comment.\n" );
+					syslog( LOG_WARNING, "Failed to copy pool comment." );
 		}
 
 		//Copy compatibility
@@ -477,7 +481,7 @@ static nvlist_t *LoadPoolConfig( const char *const szzVDevs, const char *const s
 			const char *szCompatibility;
 			if( !nvlist_lookup_string( nvlLatest, ZPOOL_CONFIG_COMPATIBILITY, &szCompatibility ) )
 				if( nvlist_add_string( nvlPool, ZPOOL_CONFIG_COMPATIBILITY, szCompatibility ) )
-					fprintf( stderr, "[Warning] Failed to copy pool compatibility.\n" );
+					syslog( LOG_WARNING, "Failed to copy pool compatibility." );
 		}
 
 		//Copy state
@@ -485,13 +489,13 @@ static nvlist_t *LoadPoolConfig( const char *const szzVDevs, const char *const s
 			uint64_t eState;
 			if( nvlist_lookup_uint64( nvlLatest, ZPOOL_CONFIG_POOL_STATE, &eState ) )
 			{
-				fprintf( stderr, "[Error] Failed to retrieve pool state.\n" );
+				syslog( LOG_ERR, "Failed to retrieve pool state." );
 				goto ERROR_AFTER_POOL;
 			}
 
 			if( nvlist_add_uint64( nvlPool, ZPOOL_CONFIG_POOL_STATE, eState ) )
 			{
-				fprintf( stderr, "[Error] Failed to copy pool state.\n" );
+				syslog( LOG_ERR, "Failed to copy pool state." );
 				goto ERROR_AFTER_POOL;
 			}
 		}
@@ -502,7 +506,7 @@ static nvlist_t *LoadPoolConfig( const char *const szzVDevs, const char *const s
 			if( !nvlist_lookup_uint64( nvlLatest, ZPOOL_CONFIG_HOSTID, &idHost ) )
 				if( nvlist_add_uint64( nvlPool, ZPOOL_CONFIG_HOSTID, idHost ) )
 				{
-					fprintf( stderr, "[Error] Failed to copy pool hostid.\n" );
+					syslog( LOG_ERR, "Failed to copy pool hostid." );
 					goto ERROR_AFTER_POOL;
 				}
 		}
@@ -513,7 +517,7 @@ static nvlist_t *LoadPoolConfig( const char *const szzVDevs, const char *const s
 			if( !nvlist_lookup_string( nvlLatest, ZPOOL_CONFIG_HOSTNAME, &szHostName ) )
 				if( nvlist_add_string( nvlPool, ZPOOL_CONFIG_HOSTNAME, szHostName ) )
 				{
-					fprintf( stderr, "[Error] Failed to copy pool hostname.\n" );
+					syslog( LOG_ERR, "Failed to copy pool hostname." );
 					goto ERROR_AFTER_POOL;
 				}
 		}
@@ -523,7 +527,7 @@ static nvlist_t *LoadPoolConfig( const char *const szzVDevs, const char *const s
 			if( !nvlist_lookup_uint64_array( nvlLatest, ZPOOL_CONFIG_HOLE_ARRAY, &auHoles, &numHoles ) )
 				if( nvlist_add_uint64_array( nvlPool, ZPOOL_CONFIG_HOLE_ARRAY, auHoles, numHoles ) )
 				{
-					fprintf( stderr, "[Error] Failed to copy pool hole_array.\n" );
+					syslog( LOG_ERR, "Failed to copy pool hole_array." );
 					goto ERROR_AFTER_POOL;
 				}
 		}
@@ -532,13 +536,13 @@ static nvlist_t *LoadPoolConfig( const char *const szzVDevs, const char *const s
 		{
 			if( nvlist_lookup_uint64( nvlLatest, ZPOOL_CONFIG_VDEV_CHILDREN, &numChildren ) )
 			{
-				fprintf( stderr, "[Error] Failed to retrieve pool vdev_children.\n" );
+				syslog( LOG_ERR, "Failed to retrieve pool vdev_children." );
 				goto ERROR_AFTER_POOL;
 			}
 
 			if( nvlist_add_uint64( nvlPool, ZPOOL_CONFIG_VDEV_CHILDREN, numChildren ) )
 			{
-				fprintf( stderr, "[Error] Failed to copy pool vdev_children.\n" );
+				syslog( LOG_ERR, "Failed to copy pool vdev_children." );
 				goto ERROR_AFTER_POOL;
 			}
 		}
@@ -553,20 +557,20 @@ static nvlist_t *LoadPoolConfig( const char *const szzVDevs, const char *const s
 			nvlist_t *nvlHole;
 			if( nvlist_alloc( &nvlHole, NV_UNIQUE_NAME, 0 ) )
 			{
-				fprintf( stderr, "[Error] Failed to allocate nvlist for pool holes.\n" );
+				syslog( LOG_ERR, "Failed to allocate nvlist for pool holes." );
 				goto ERROR_AFTER_POOL;
 			}
 
 			if( nvlist_add_string( nvlHole, ZPOOL_CONFIG_TYPE, VDEV_TYPE_HOLE ) )
 			{
-				fprintf( stderr, "[Error] Failed to set hole nvlist type.\n" );
+				syslog( LOG_ERR, "Failed to set hole nvlist type." );
 				numHoles = 1;	//Only one hole to clean up
 				goto ERROR_AFTER_HOLES;
 			}
 
 			if( nvlist_add_uint64( nvlHole, ZPOOL_CONFIG_GUID, 0ULL ) )
 			{
-				fprintf( stderr, "[Error] Failed to set hole nvlist guid.\n" );
+				syslog( LOG_ERR, "Failed to set hole nvlist guid." );
 				numHoles = 1;	//Only one hole to clean up
 				goto ERROR_AFTER_HOLES;
 			}
@@ -578,14 +582,14 @@ static nvlist_t *LoadPoolConfig( const char *const szzVDevs, const char *const s
 				nvlist_t *nvl;
 				if( nvlist_dup( nvlHole, &nvl, 0 ) )
 				{
-					fprintf( stderr, "[Error] Failed to copy nvlist for pool holes.\n" );
+					syslog( LOG_ERR, "Failed to copy nvlist for pool holes." );
 					numHoles = uHole;	//Only clean up what was created so far
 					goto ERROR_AFTER_HOLES;
 				}
 
 				if( nvlist_add_uint64( nvlHole, ZPOOL_CONFIG_ID, auHoles[ uHole ] ) )
 				{
-					fprintf( stderr, "[Error] Failed to set hole nvlist config id %" PRIu64 ".\n", auHoles[ uHole ] );
+					syslog( LOG_ERR, "Failed to set hole nvlist config id %" PRIu64 ".", auHoles[ uHole ] );
 					numHoles = uHole;	//Only clean up what was created so far
 					goto ERROR_AFTER_HOLES;
 				}
@@ -596,7 +600,7 @@ static nvlist_t *LoadPoolConfig( const char *const szzVDevs, const char *const s
 			//The template did not have the config id set (needed to be added per copy). Complete it.
 			if( nvlist_add_uint64( nvlHole, ZPOOL_CONFIG_ID, auHoles[ 0 ] ) )
 			{
-				fprintf( stderr, "[Error] Failed to set hole nvlist config id %" PRIu64 ".\n", auHoles[ 0 ] );
+				syslog( LOG_ERR, "Failed to set hole nvlist config id %" PRIu64 ".", auHoles[ 0 ] );
 				goto ERROR_AFTER_HOLES;
 			}
 		}
@@ -613,14 +617,14 @@ static nvlist_t *LoadPoolConfig( const char *const szzVDevs, const char *const s
 			nvlist_t *anvlMissing[ numMissing ];
 			if( numMissing )
 			{
-				fprintf( stderr, "[Warning] %u top-level vdevs are missing!\n", numMissing );
+				syslog( LOG_WARNING, "%u top-level vdevs are missing!", numMissing );
 
 				for( unsigned uMissing = 0; uMissing < numMissing; ++uMissing )
 				{
 					nvlist_t *nvlMissing;
 					if( nvlist_alloc( &nvlMissing, NV_UNIQUE_NAME, 0 ) )
 					{
-						fprintf( stderr, "[Error] Failed to allocate nvlist for missing top-level vdev.\n" );
+						syslog( LOG_ERR, "Failed to allocate nvlist for missing top-level vdev." );
 						numMissing = uMissing;	//Only clean up what was created so far
 						goto ERROR_AFTER_MISSING;
 					}
@@ -628,14 +632,14 @@ static nvlist_t *LoadPoolConfig( const char *const szzVDevs, const char *const s
 
 					if( nvlist_add_string( nvlMissing, ZPOOL_CONFIG_TYPE, VDEV_TYPE_MISSING ) )
 					{
-						fprintf( stderr, "[Error] Failed to set missing vdev type.\n" );
+						syslog( LOG_ERR, "Failed to set missing vdev type." );
 						numMissing = uMissing + 1;	//Only clean up what was created so far
 						goto ERROR_AFTER_MISSING;
 					}
 
 					if( nvlist_add_uint64( nvlMissing, ZPOOL_CONFIG_GUID, 0ULL ) )
 					{
-						fprintf( stderr, "[Error] Failed to set missing vdev guid.\n" );
+						syslog( LOG_ERR, "Failed to set missing vdev guid." );
 						numMissing = uMissing + 1;	//Only clean up what was created so far
 						goto ERROR_AFTER_MISSING;
 					}
@@ -658,14 +662,14 @@ static nvlist_t *LoadPoolConfig( const char *const szzVDevs, const char *const s
 			nvlist_t *nvlRoot;
 			if( nvlist_alloc( &nvlRoot, NV_UNIQUE_NAME, 0 ) )
 			{
-				fprintf( stderr, "[Error] Failed to create root vdev.\n" );
+				syslog( LOG_ERR, "Failed to create root vdev." );
 				goto ERROR_AFTER_MISSING;
 			}
 
 			//Add the array of children into the root vdev
 			if( nvlist_add_nvlist_array( nvlRoot, ZPOOL_CONFIG_CHILDREN, (const nvlist_t **) anvlChildren, numChildren ) )
 			{
-				fprintf( stderr, "[Error] Failed to add children to root vdev.\n" );
+				syslog( LOG_ERR, "Failed to add children to root vdev." );
 				nvlist_free( nvlRoot );
 				goto ERROR_AFTER_MISSING;
 			}
@@ -683,25 +687,25 @@ static nvlist_t *LoadPoolConfig( const char *const szzVDevs, const char *const s
 
 			if( nvlist_add_string( nvlRoot, ZPOOL_CONFIG_TYPE, VDEV_TYPE_ROOT ) )
 			{
-				fprintf( stderr, "[Error] Failed to set type of root vdev.\n" );
+				syslog( LOG_ERR, "Failed to set type of root vdev." );
 				goto ERROR_AFTER_ROOT;
 			}
 			
 			if( nvlist_add_uint64( nvlRoot, ZPOOL_CONFIG_ID, 0ULL ) )
 			{
-				fprintf( stderr, "[Error] Failed to set id of root vdev.\n" );
+				syslog( LOG_ERR, "Failed to set id of root vdev." );
 				goto ERROR_AFTER_ROOT;
 			}
 			
 			if( nvlist_add_uint64( nvlRoot, ZPOOL_CONFIG_GUID, idPool ) )
 			{
-				fprintf( stderr, "[Error] Failed to set guid of root vdev.\n" );
+				syslog( LOG_ERR, "Failed to set guid of root vdev." );
 				goto ERROR_AFTER_ROOT;
 			}
 
 			if( nvlist_add_nvlist( nvlPool, ZPOOL_CONFIG_VDEV_TREE, nvlRoot ) )
 			{
-				fprintf( stderr, "[Error] Failed to add root vdev to pool config.\n" );
+				syslog( LOG_ERR, "Failed to add root vdev to pool config." );
 				nvlist_free( nvlRoot );
 				nvlist_free( nvlPool );
 			}
@@ -737,14 +741,14 @@ static unsigned long GetHostID( void )
 	FILE *const f = fopen( "/proc/sys/kernel/spl/hostid", "re" );
 	if( !f )
 	{
-		fprintf( stderr, "[Error] Failed to open spl file for host id.\n" );
+		syslog( LOG_ERR, "Failed to open spl file for host id." );
 		return 0;
 	}
 
 	unsigned long uHostID;
 	if( fscanf( f, "%lx", &uHostID ) != 1 )
 	{
-		fprintf( stderr, "[Error] Failed to retrieve host id.\n" );
+		syslog( LOG_ERR, "Failed to retrieve host id." );
 		uHostID = 0;
 	}
 
@@ -769,19 +773,19 @@ bool ImportPool( const int fdZFS, const char *const szzVDevs, const char *const 
 		static_assert( sizeof( size_t ) == sizeof( zc.zc_nvlist_conf_size ) );
 		if( nvlist_size( nvlPool, &zc.zc_nvlist_conf_size, NV_ENCODE_NATIVE ) )
 		{
-			fprintf( stderr, "[Error] Failed to get size of pool configuration.\n" );
+			syslog( LOG_ERR, "Failed to get size of pool configuration." );
 			goto ERROR_AFTER_POOL;	//zc_nvlist_conf and zc_nvlist_dst are both NULL, so free will just ignore them. 
 		}
 
 		if( !( zc.zc_nvlist_conf = (uint64_t) malloc( zc.zc_nvlist_conf_size ) ) )
 		{
-			fprintf( stderr, "[Error] Failed to allocate memory for packed pool configuration.\n" );
+			syslog( LOG_ERR, "Failed to allocate memory for packed pool configuration." );
 			goto ERROR_AFTER_POOL;	//zc_nvlist_conf and zc_nvlist_dst are both NULL, so free will just ignore them.
 		}
 
 		if( nvlist_pack( nvlPool, (char **) &zc.zc_nvlist_conf, &zc.zc_nvlist_conf_size, NV_ENCODE_NATIVE, 0 ) )
 		{
-			fprintf( stderr, "[Error] Failed to pack pool configuration.\n" );
+			syslog( LOG_ERR, "Failed to pack pool configuration." );
 			goto ERROR_AFTER_CONF;
 		}
 
@@ -793,7 +797,7 @@ bool ImportPool( const int fdZFS, const char *const szzVDevs, const char *const 
 	zc.zc_nvlist_dst = (uint64_t) calloc( 1, zc.zc_nvlist_dst_size );
 	if( !zc.zc_nvlist_dst )
 	{
-		fprintf( stderr, "[Error] Failed to allocate memory for imported pool configuration.\n" );
+		syslog( LOG_ERR, "Failed to allocate memory for imported pool configuration." );
 		goto ERROR_AFTER_CONF;
 	}
 
@@ -808,20 +812,20 @@ TRYIMPORT_CONFIG:
 			zc.zc_nvlist_dst = (uint64_t) calloc( 1, zc.zc_nvlist_dst_size );
 			if( !zc.zc_nvlist_dst )
 			{
-				fprintf( stderr, "[Error] Failed to allocate memory for imported proto-pool configuration.\n" );
+				syslog( LOG_ERR, "Failed to allocate memory for imported proto-pool configuration." );
 				goto ERROR_AFTER_CONF;
 			}
 			uDstSize = zc.zc_nvlist_dst_size;
 			goto TRYIMPORT_CONFIG;
 		default:
-			fprintf( stderr, "[Error] Failed to import proto-pool. Error code %d.\n", errno );
+			syslog( LOG_ERR, "Failed to import proto-pool. Error code %d.", errno );
 			goto ERROR_AFTER_DST;
 		}
 
 	//Unpack the pool configuration
 	if( nvlist_unpack( (void *) zc.zc_nvlist_dst, zc.zc_nvlist_dst_size, &nvlPool, 0 ) )
 	{
-		fprintf( stderr, "[Error] Failed to unpack imported pool configuration.\n" );
+		syslog( LOG_ERR, "Failed to unpack imported pool configuration." );
 		goto ERROR_AFTER_DST;
 	}
 	
@@ -830,13 +834,13 @@ TRYIMPORT_CONFIG:
 		uint64_t uVersion;
 		if( nvlist_lookup_uint64( nvlPool, ZPOOL_CONFIG_VERSION, &uVersion ) )
 		{
-			fprintf( stderr, "[Error] Failed to retrieve pool version.\n" );
+			syslog( LOG_ERR, "Failed to retrieve pool version." );
 			goto ERROR_AFTER_POOL;
 		}
 
 		if( !SPA_VERSION_IS_SUPPORTED( uVersion ) )
 		{
-			fprintf( stderr, "[Error] Cannot import '%s': pool is formatted using an unsupported ZFS version\n", szPool );
+			syslog( LOG_ERR, "Cannot import '%s': pool is formatted using an unsupported ZFS version", szPool );
 			goto ERROR_AFTER_POOL;
 		}
 	}
@@ -846,7 +850,7 @@ TRYIMPORT_CONFIG:
 		nvlist_t *nvlLoadInfo;
 		if( nvlist_lookup_nvlist( nvlPool, ZPOOL_CONFIG_LOAD_INFO, &nvlLoadInfo ) )
 		{
-			fprintf( stderr, "[Error] Failed to retrieve load info from pool.\n" );
+			syslog( LOG_ERR, "Failed to retrieve load info from pool." );
 			goto ERROR_AFTER_POOL;
 		}
 
@@ -855,7 +859,7 @@ TRYIMPORT_CONFIG:
 			uint64_t eState;
 			if( nvlist_lookup_uint64( nvlPool, ZPOOL_CONFIG_POOL_STATE, &eState ) )
 			{
-				fprintf( stderr, "[Error] Failed to retrieve pool state.\n" );
+				syslog( LOG_ERR, "Failed to retrieve pool state." );
 				goto ERROR_AFTER_POOL;
 			}
 
@@ -868,7 +872,7 @@ TRYIMPORT_CONFIG:
 					//If its not there then we're likely talking to an older kernel, so use the top one.
 					if( nvlist_lookup_uint64( nvlPool, ZPOOL_CONFIG_HOSTID, &uHostID ) )
 					{
-						fprintf( stderr, "[Error] Failed to retrieve hostid from pool.\n" );
+						syslog( LOG_ERR, "Failed to retrieve hostid from pool." );
 						goto ERROR_AFTER_POOL;
 					}
 				}
@@ -879,7 +883,7 @@ TRYIMPORT_CONFIG:
 
 				if( uHostID != uLocalHostID )
 				{
-					fprintf( stderr, "[Error] The pool \"%s\" was exported on a different system. Please use the zpool tool to import.\n", szPool );
+					syslog( LOG_ERR, "The pool \"%s\" was exported on a different system. Please use the zpool tool to import.", szPool );
 					goto ERROR_AFTER_POOL;
 				}
 			}
@@ -892,7 +896,7 @@ TRYIMPORT_CONFIG:
 			{
 				if( eMMP != MMP_STATE_INACTIVE )
 				{
-					fprintf( stderr, "[Error] The pool has Multi-Mode Protection (MMP) enabled. This is currently not supported by this importer.\n" );
+					syslog( LOG_ERR, "The pool has Multi-Mode Protection (MMP) enabled. This is currently not supported by this importer." );
 					goto ERROR_AFTER_POOL;
 				}
 			}
@@ -904,21 +908,21 @@ TRYIMPORT_CONFIG:
 		static_assert( sizeof( size_t ) == sizeof( zc.zc_nvlist_conf_size ) );
 		if( nvlist_size( nvlPool, &zc.zc_nvlist_conf_size, NV_ENCODE_NATIVE ) )
 		{
-			fprintf( stderr, "[Error] Failed to get size of pool configuration.\n" );
+			syslog( LOG_ERR, "Failed to get size of pool configuration." );
 			goto ERROR_AFTER_POOL;
 		}
 
 		void *const p = realloc( (void *) zc.zc_nvlist_conf, zc.zc_nvlist_conf_size );
 		if( !p )
 		{
-			fprintf( stderr, "[Error] Failed to allocate memory for packed pool configuration.\n" );
+			syslog( LOG_ERR, "Failed to allocate memory for packed pool configuration." );
 			goto ERROR_AFTER_POOL;
 		}
 		zc.zc_nvlist_conf = (uint64_t) p;
 
 		if( nvlist_pack( nvlPool, (char **) &zc.zc_nvlist_conf, &zc.zc_nvlist_conf_size, NV_ENCODE_NATIVE, 0 ) )
 		{
-			fprintf( stderr, "[Error] Failed to pack pool configuration.\n" );
+			syslog( LOG_ERR, "Failed to pack pool configuration." );
 			goto ERROR_AFTER_CONF;
 		}
 
@@ -940,12 +944,12 @@ IMPORT_CONFIG:
 			zc.zc_nvlist_dst = (uint64_t) calloc( 1, zc.zc_nvlist_dst_size );
 			if( !zc.zc_nvlist_dst )
 			{
-				fprintf( stderr, "[Error] Failed to allocate memory for imported pool configuration.\n" );
+				syslog( LOG_ERR, "Failed to allocate memory for imported pool configuration." );
 				goto ERROR_AFTER_CONF;
 			}
 			goto IMPORT_CONFIG;
 		default:
-			fprintf( stderr, "[Error] Failed to import pool. Error code %d.\n", errno );
+			syslog( LOG_ERR, "Failed to import pool. Error code %d.", errno );
 			goto ERROR_AFTER_DST;
 		}
 
@@ -955,7 +959,7 @@ IMPORT_CONFIG:
 		//Unpack the pool configuration
 		if( nvlist_unpack( (void *) zc.zc_nvlist_dst, zc.zc_nvlist_dst_size, &nvlPool, 0 ) )
 		{
-			fprintf( stderr, "[Error] Failed to unpack imported pool configuration.\n" );
+			syslog( LOG_ERR, "Failed to unpack imported pool configuration." );
 			goto ERROR_AFTER_DST;
 		}
 
@@ -1008,7 +1012,7 @@ TRYIMPORT_CONFIG:
 			zc->zc_nvlist_dst = (uint64_t) calloc( 1, zc->zc_nvlist_dst_size );
 			if( !zc->zc_nvlist_dst )
 			{
-				fprintf( stderr, "[Error] Failed to allocate memory for dataset listing.\n" );
+				syslog( LOG_ERR, "Failed to allocate memory for dataset listing." );
 				return NULL;
 			}
 
@@ -1018,11 +1022,11 @@ TRYIMPORT_CONFIG:
 			uDstSize = zc->zc_nvlist_dst_size;
 			goto TRYIMPORT_CONFIG;
 		case ENOENT:
-			fprintf( stderr, "[Error] Failed to list datasets: the underlying dataset has been removed.\n" );
+			syslog( LOG_ERR, "Failed to list datasets: the underlying dataset has been removed." );
 			free( (void *) zc->zc_nvlist_dst );
 			return NULL;
 		default:
-			fprintf( stderr, "[Error] Failed to list datasets. Error code %d.\n", errno );
+			syslog( LOG_ERR, "Failed to list datasets. Error code %d.", errno );
 			free( (void *) zc->zc_nvlist_dst );
 			return NULL;
 		}
@@ -1030,7 +1034,7 @@ TRYIMPORT_CONFIG:
 	nvlist_t *nvl;
 	if( nvlist_unpack( (void *) zc->zc_nvlist_dst, zc->zc_nvlist_dst_size, &nvl, 0 ) )
 	{
-		fprintf( stderr, "[Error] Failed to unpack imported pool configuration.\n" );
+		syslog( LOG_ERR, "Failed to unpack imported pool configuration." );
 		free( (void *) zc->zc_nvlist_dst );
 		return NULL;
 	}
@@ -1066,20 +1070,20 @@ static bool MountDataset( const char *const szDataset, nvlist_t *const nvl, cons
 		nvlist_t *nvlKeystatus;
 		if( nvlist_lookup_nvlist( (nvlist_t *) nvl, "keystatus", &nvlKeystatus ) )
 		{
-			fprintf( stderr, "[Error] Failed to find keystatus property for dataset \"%s\".\n", szDataset );
+			syslog( LOG_ERR, "Failed to find keystatus property for dataset \"%s\".", szDataset );
 			return false;
 		}
 
 		uint64_t eKeyStatus;
 		if( nvlist_lookup_uint64( nvlKeystatus, ZPROP_VALUE, &eKeyStatus ) )
 		{
-			fprintf( stderr, "[Error] Failed to find keystatus value for dataset \"%s\".\n", szDataset );
+			syslog( LOG_ERR, "Failed to find keystatus value for dataset \"%s\".", szDataset );
 			return false;
 		}
 
 		if( eKeyStatus == ZFS_KEYSTATUS_UNAVAILABLE )
 		{
-			fprintf( stderr, "[Error] Dataset \"%s\" requires a key that isn't loaded.\n", szDataset );
+			syslog( LOG_ERR, "Dataset \"%s\" requires a key that isn't loaded.", szDataset );
 			return false;
 		}
 	}
@@ -1092,7 +1096,7 @@ static bool MountDataset( const char *const szDataset, nvlist_t *const nvl, cons
 			uint64_t eCanMount;
 			if( nvlist_lookup_uint64( nvlCanMount, ZPROP_VALUE, &eCanMount ) )
 			{
-				fprintf( stderr, "[Error] Failed to find canmount value for dataset \"%s\".\n", szDataset );
+				syslog( LOG_ERR, "Failed to find canmount value for dataset \"%s\".", szDataset );
 				return false;
 			}
 
@@ -1106,7 +1110,7 @@ static bool MountDataset( const char *const szDataset, nvlist_t *const nvl, cons
 		nvlist_t *nvlRedacted;
 		if( !nvlist_lookup_nvlist( (nvlist_t *) nvl, "redacted", &nvlRedacted ) )
 		{
-			fprintf( stderr, "[Error] Dataset \"%s\" is redacted. This feature is currently not supported by this importer.\n", szDataset );
+			syslog( LOG_ERR, "Dataset \"%s\" is redacted. This feature is currently not supported by this importer.", szDataset );
 			return false;
 		}
 	}
@@ -1119,13 +1123,13 @@ static bool MountDataset( const char *const szDataset, nvlist_t *const nvl, cons
 			uint64_t fZoned;
 			if( nvlist_lookup_uint64( nvlZoned, ZPROP_VALUE, &fZoned ) )
 			{
-				fprintf( stderr, "[Error] Failed to find zoned value for dataset \"%s\".\n", szDataset );
+				syslog( LOG_ERR, "Failed to find zoned value for dataset \"%s\".", szDataset );
 				return false;
 			}
 
 			if( fZoned )
 			{
-				fprintf( stderr, "[Error] Dataset \"%s\" is zoned. This feature is currently not supported by this importer.\n", szDataset );
+				syslog( LOG_ERR, "Dataset \"%s\" is zoned. This feature is currently not supported by this importer.", szDataset );
 				return false;
 			}
 		}
@@ -1137,14 +1141,14 @@ static bool MountDataset( const char *const szDataset, nvlist_t *const nvl, cons
 		nvlist_t *nvlMountPoint;
 		if( nvlist_lookup_nvlist( (nvlist_t *) nvl, "mountpoint", &nvlMountPoint ) )
 		{
-			fprintf( stderr, "[Error] Failed to find mountpoint property for dataset \"%s\".\n", szDataset );
+			syslog( LOG_ERR, "Failed to find mountpoint property for dataset \"%s\".", szDataset );
 			return false;
 		}
 
 		const char *szValue;
 		if( nvlist_lookup_string( nvlMountPoint, ZPROP_VALUE, &szValue ) )
 		{
-			fprintf( stderr, "[Error] Failed to find mountpoint value for dataset \"%s\".\n", szDataset );
+			syslog( LOG_ERR, "Failed to find mountpoint value for dataset \"%s\".", szDataset );
 			return false;
 		}
 
@@ -1153,27 +1157,27 @@ static bool MountDataset( const char *const szDataset, nvlist_t *const nvl, cons
 
 		if( !strcmp( szValue, "legacy" ) )
 		{
-			fprintf( stderr, "[Error] Dataset \"%s\" uses unsupported \"legacy\" mountpoint.\n", szDataset );
+			syslog( LOG_ERR, "Dataset \"%s\" uses unsupported \"legacy\" mountpoint.", szDataset );
 			return false;
 		}
 
 		const char *szSource;
 		if( nvlist_lookup_string( nvlMountPoint, ZPROP_SOURCE, &szSource ) )
 		{
-			fprintf( stderr, "[Error] Failed to find mountpoint source for dataset \"%s\".\n", szDataset );
+			syslog( LOG_ERR, "Failed to find mountpoint source for dataset \"%s\".", szDataset );
 			return false;
 		}
 
 		if( !strcmp( szSource, ZPROP_SOURCE_VAL_RECVD ) )
 		{
-			fprintf( stderr, "[Error] Failed to find mountpoint source for dataset \"%s\": Received datasets are currently not supported by this importer.\n", szDataset );
+			syslog( LOG_ERR, "Failed to find mountpoint source for dataset \"%s\": Received datasets are currently not supported by this importer.", szDataset );
 			return false;
 		}
 
 		const char *const szRelativePath = szDataset + strlen( szSource );
 		if( strncmp( szDataset, szSource, strlen( szSource ) ) || szRelativePath[ 0 ] != '\0' && szRelativePath[ 0 ] != '/' )
 		{
-			fprintf( stderr, "[Error] Mountpoint source for dataset \"%s\" is corrupted.\n", szDataset );
+			syslog( LOG_ERR, "Mountpoint source for dataset \"%s\" is corrupted.", szDataset );
 			return false;
 		}
 
@@ -1191,7 +1195,7 @@ static bool MountDataset( const char *const szDataset, nvlist_t *const nvl, cons
 	{
 		if( errno != EEXIST )
 		{
-			fprintf( stderr, "[Error] Failed to create path for mountpoint: \"%s\".\n", szMountPoint );
+			syslog( LOG_ERR, "Failed to create path for mountpoint: \"%s\".", szMountPoint );
 			return false;
 		}
 
@@ -1200,7 +1204,7 @@ static bool MountDataset( const char *const szDataset, nvlist_t *const nvl, cons
 			DIR *const dir = opendir( szMountPoint );
 			if( !dir )
 			{
-				fprintf( stderr, "[Error] Failed to check if directory \"%s\" is empty.\n", szMountPoint );
+				syslog( LOG_ERR, "Failed to check if directory \"%s\" is empty.", szMountPoint );
 				return false;
 			}
 
@@ -1208,7 +1212,7 @@ static bool MountDataset( const char *const szDataset, nvlist_t *const nvl, cons
 			for( struct dirent *pDirEnt; pDirEnt = readdir( dir ); )
 				if( ++numEntries > 2 )
 				{
-					fprintf( stderr, "[Error] Mounting directory \"%s\" is not empty.\n", szMountPoint );
+					syslog( LOG_ERR, "Mounting directory \"%s\" is not empty.", szMountPoint );
 					closedir( dir );
 					return false;
 				}
@@ -1219,12 +1223,11 @@ static bool MountDataset( const char *const szDataset, nvlist_t *const nvl, cons
 
 	if( mount( szDataset, szMountPoint, MNTTYPE_ZFS, 0, NULL ) )
 	{
-		fprintf( stderr, "[Error] Failed to mount dataset \"%s\".\n", szDataset );
+		syslog( LOG_ERR, "Failed to mount dataset \"%s\".", szDataset );
 		return false;
 	}
 
-	printf( "Dataset \"%s\" mounted at \"%s\".\n", szDataset, szMountPoint );
-	fflush( stdout );
+	syslog( LOG_INFO, "Dataset \"%s\" mounted at \"%s\".", szDataset, szMountPoint );
 
 	//TODO: zfs_share_one
 
@@ -1275,7 +1278,7 @@ bool MountPool( int fdZFS, const char *const szPool )
 	zc.zc_nvlist_dst = (uint64_t) calloc( 1, zc.zc_nvlist_dst_size );
 	if( !zc.zc_nvlist_dst )
 	{
-		fprintf( stderr, "[Error] Failed to allocate memory for imported pool configuration.\n" );
+		syslog( LOG_ERR, "Failed to allocate memory for imported pool configuration." );
 		return false;
 	}
 
@@ -1309,31 +1312,32 @@ bool LoadPoolKey( const char *const szEncryptionRoot, const block256_t ymmKey )
 	const int iRet = lzc_load_key( szEncryptionRoot, false, (char *) ymmKey.ab, sizeof( ymmKey ) );
 	if( iRet )
 	{
-		fprintf( stderr, "[Error] Failed to load key for encryption root \"%s\": ", szEncryptionRoot );
+		const char *szError;
 		switch( iRet )
 		{
 		case EPERM:
-			fputs( "Permission denied.\n", stderr );
+			szError = "Permission denied.";
 			break;
 		case EINVAL:
-			fputs( "Invalid parameters provided.\n", stderr );
+			szError = "Invalid parameters provided.";
 			break;
 		case EEXIST:
-			fputs( "Key already loaded.\n", stderr );
+			szError = "Key already loaded.";
 			break;
 		case EBUSY:
-			fputs( "Dataset is busy.\n", stderr );
+			szError = "Dataset is busy.";
 			break;
 		case EACCES:
-			fputs( "Incorrect key provided.\n", stderr );
+			szError = "Incorrect key provided.";
 			break;
 		case ZFS_ERR_CRYPTO_NOTSUP:
-			fputs( "Dataset uses an unsupported encryption suite.\n", stderr );
+			szError = "Dataset uses an unsupported encryption suite.";
 			break;
 		default:
-			fprintf( stderr, "Unknown error %d.\n", iRet );
-			break;
+			syslog( LOG_ERR, "Failed to load key for encryption root \"%s\": Unknown error %d.", szEncryptionRoot, iRet );
+			return false;
 		}
+		syslog( LOG_ERR, "Failed to load key for encryption root \"%s\": %s", szEncryptionRoot, szError );
 		return false;
 	}
 

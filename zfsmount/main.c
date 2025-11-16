@@ -1,8 +1,8 @@
-#include <stdio.h>
 #include <stdlib.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <string.h>
+#include <syslog.h>
 #include <loadkey/loadkey.h>
 #include <zfstools/zfstools.h>
 
@@ -14,20 +14,22 @@ static const pem_t g_PEM = { PEM };
 
 int main( int argc, char *argv[ ] )
 {
+	openlog( "zfsmount", LOG_CONS, LOG_DAEMON );
+
 	if( !LoadKey( &g_ymmKey, &g_PEM, ID_KEY ) )
-		return EXIT_FAILURE;
+		goto ERROR_AFTER_LOG;
 
 	if( libzfs_core_init( ) )
 	{
-		fputs( "Failed to initialize ZFS core.\n", stderr );
-		return EXIT_FAILURE;
+		syslog( LOG_ERR, "Failed to initialize ZFS core." );
+		goto ERROR_AFTER_LOG;
 	}
 
 	//This is basically what libzfs_core_init also does, except that libzfs_core does not expose g_fd.
 	const int fdZFS = open( ZFS_DEV, O_RDWR | O_CLOEXEC );
 	if( fdZFS < 0 )
 	{
-		fputs( "Failed to open handle to ZFS device.\n", stderr );
+		syslog( LOG_ERR, "Failed to open handle to ZFS device." );
 		goto ERROR_AFTER_INIT;
 	}
 
@@ -43,12 +45,14 @@ int main( int argc, char *argv[ ] )
 	(void) close( fdZFS );
 	libzfs_core_fini( );
 
-	printf( "Done!\n" );
+	closelog( );
 	return EXIT_SUCCESS;
 
 ERROR_AFTER_FD:
 	(void) close( fdZFS );
 ERROR_AFTER_INIT:
 	libzfs_core_fini( );
+ERROR_AFTER_LOG:
+	closelog( );
 	return EXIT_FAILURE;
 }

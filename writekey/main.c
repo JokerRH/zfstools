@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <fcntl.h>
 #include <loadkey/loadkey.h>
+#include "logging.h"
 
 #ifdef WIN32
 #	include <io.h>
@@ -14,17 +15,19 @@ static const pem_t g_pem = { PEM };
 
 int main( int argc, char *argv[ ] )
 {
+	openlog( "writekey", LOG_CONS | LOG_PERROR, LOG_USER );
+
 	if( argc < 2 )
 	{
-		fputs( "Insufficient arguments. Please provide the file that shall receive the unwrapped binary key.\n", stderr );
-		return EXIT_FAILURE;
+		syslog( LOG_ERR, "Insufficient arguments. Please provide the file that shall receive the unwrapped binary key." );
+		goto ERROR_AFTER_LOG;
 	}
 
 	const int fd = open( argv[ 1 ], O_WRONLY | O_CREAT | O_TRUNC, 0600 );
 	if( fd < 0 )
 	{
-		fprintf( stderr, "Failed to open output file \"%s\".\n", argv[ 1 ] );
-		return EXIT_FAILURE;
+		syslog( LOG_ERR, "Failed to open output file \"%s\".", argv[ 1 ] );
+		goto ERROR_AFTER_LOG;
 	}
 
 	if( !LoadKey( &g_ymmKey, &g_pem, ID_KEY ) )
@@ -32,19 +35,22 @@ int main( int argc, char *argv[ ] )
 
 	if( write( fd, g_ymmKey.ab, sizeof( g_ymmKey ) ) != sizeof( g_ymmKey ) )
 	{
-		fprintf( stderr, "Failed to write unwrapped key to output file \"%s\".\n", argv[ 1 ] );
+		syslog( LOG_ERR, "Failed to write unwrapped key to output file \"%s\".", argv[ 1 ] );
 		goto ERROR_AFTER_FILE;
 	}
 
 	if( close( fd ) < 0 )
 	{
-		fprintf( stderr, "Failed to close output file \"%s\".\n", argv[ 1 ] );
-		return EXIT_FAILURE;
+		syslog( LOG_ERR, "Failed to close output file \"%s\".", argv[ 1 ] );
+		goto ERROR_AFTER_LOG;
 	}
 
+	closelog( );
 	return EXIT_SUCCESS;
 
 ERROR_AFTER_FILE:
 	close( fd );
+ERROR_AFTER_LOG:
+	closelog( );
 	return EXIT_FAILURE;
 }

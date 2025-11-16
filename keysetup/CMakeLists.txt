@@ -13,6 +13,7 @@ target_sources( keysetup
 		${CMAKE_CURRENT_SOURCE_DIR}/Rijndael.c
 )
 
+target_include_directories( keysetup PRIVATE ${CMAKE_SOURCE_DIR}/shared )
 target_link_libraries( keysetup PRIVATE loadkey )
 target_link_libraries( keysetup PRIVATE PkgConfig::YKCS11 )
 
