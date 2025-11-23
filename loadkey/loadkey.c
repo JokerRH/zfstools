@@ -23,6 +23,7 @@
 #	include <sys/sysmacros.h>
 #	include <sys/types.h>
 #	include <dirent.h>
+#	include <signal.h>
 #endif
 
 #define USB_DEV_ROOT	"/sys/bus/usb/devices/"
@@ -128,6 +129,26 @@ unsigned ReadPIN( char pin[ 8 ] )
 }
 
 #ifndef WIN32
+/*!
+	\param szPath	The path to create. On error, this string is shortened to the subpath that failed.
+*/
+int mkdirp( char *szPath, mode_t mode )
+{
+	for( char *pSeparator = szPath[ 0 ] == '/' ? szPath + 1 : szPath; *pSeparator; ++pSeparator )
+	{
+		if( pSeparator[ 0 ] != '/' )
+			continue;
+
+		pSeparator[ 0 ] = '\0';
+		if( mkdir( szPath, mode ) && errno != EEXIST )
+			return -1;
+
+		pSeparator[ 0 ] = '/';
+	}
+
+	return mkdir( szPath, mode );
+}
+
 /*!
 	\brief Searches for a USB device based on Yubico vendor id and creates the corresponding device node for it
 */
@@ -240,9 +261,9 @@ static bool MakeYubikeyDev( void )
 			syslog( LOG_ERR, "Failed to format device bus path." );
 			goto ERROR_AFTER_DIR;
 		}
-		if( mkdir( szPath, 0755 ) && errno != EEXIST )
+		if( mkdirp( szPath, 0755 ) && errno != EEXIST )
 		{
-			syslog( LOG_ERR, "Failed to create device bus path." );
+			syslog( LOG_ERR, "Failed to create device bus path \"%s\". Error code %d.", szPath, errno );
 			goto ERROR_AFTER_DIR;
 		}
 
@@ -308,13 +329,86 @@ static bool StartPCSCD( void )
 			_exit( EXIT_SUCCESS );
 	}
 
-	static char *const s_aszArg[ ] = { "-f", "-d", "--force-reader-polling", NULL };
+	static char *const s_aszArg[ ] = { "-x", "--force-reader-polling", NULL };
 	static char *const s_aszNullEnvP[ ] = { NULL };
 	(void)! execve( "/sbin/pcscd", s_aszArg, s_aszNullEnvP );
 
 	//If we reach this point, execve failed. Print error message and exit
 	syslog( LOG_ERR, "Failed to start pcscd." );
 	_exit( EXIT_FAILURE );
+#endif
+}
+
+static void StopPCSCD( void )
+{
+#ifndef WIN32
+	//Read pid
+	//Layout at the time of opening the stat file: "/proc/" pid "/stat" (including a terminating NULL). The pid is an integer and should not be larger than 10 digits, but the pid file may contain further characters (e.g. '\n').
+	//Expected layout after reading the stat file: pid " (pcscd)" (doesn't need a terminating NULL).
+	//Ensure that the buffer is large enough to encompass this, but also not so large that the /proc/pid/stat file can fully fit (in that case adjust the test for file size below)
+	char ab[ 32 ] = "/proc/";
+	char *const abPID = ab + sizeof( "/proc/" ) - 1;
+	ssize_t numChars;
+	{
+		const int fd = open( "/run/pcscd/pcscd.pid", O_RDONLY | O_CLOEXEC );
+		numChars = read( fd, abPID, sizeof( ab ) - ( abPID - ab ) );
+		close( fd );
+
+		if( numChars < 0 )
+		{
+			syslog( LOG_WARNING, "Failed to read pcscd pid." );
+			return;
+		}
+		else if( numChars >= sizeof( ab ) - ( abPID - ab ) )
+		{
+			syslog( LOG_WARNING, "Failed to read pcscd pid: File content is larger than expected." );
+			return;
+		}
+	}
+
+	//Ensure the file contains just a number (pid)
+	{
+		bool fValid = false;
+		for( ssize_t i = 0; i < numChars; ++i )
+			if( abPID[ i ] < '0' || abPID[ i ] > '9' )
+			{
+				if( fValid )
+				{
+					numChars = i;
+					break;
+				}
+				syslog( LOG_WARNING, "Failed to read pcscd pid: File content is not a valid pid." );
+				return;
+			}
+			else
+				fValid = true;
+	}
+	const pid_t pid = atoi( abPID );
+
+	//Load the content of the /proc/pid/stat file
+	memcpy( abPID + numChars, "/stat", sizeof( "/stat" ) );
+	{
+		const int fd = open( ab, O_RDONLY | O_CLOEXEC );
+		const ssize_t numRead = read( fd, ab, sizeof( ab ) );
+		close( fd );
+
+		if( numRead != sizeof( ab ) )
+		{
+			syslog( LOG_WARNING, "Failed to validate pcscd pid: The corresponding stat file is too short." );
+			return;
+		}
+	}
+
+	//Ensure the pid matches pcscd
+	if( memcmp( ab + numChars, " (pcscd)", sizeof( " (pcscd)" ) - 1 ) )
+	{
+		syslog( LOG_WARNING, "Failed to validate pcscd pid: The pid in the daemon pid file does not match pcscd." );
+		return;
+	}
+
+	//Kill pcscd
+	if( kill( pid, SIGTERM ) < 0 )
+		syslog( LOG_WARNING, "Failed to terminate pcscd." );
 #endif
 }
 
@@ -550,6 +644,8 @@ bool LoadKey( block256_t *const pymmKey, const const pem_t *const pPEM, const un
 	block256_t ymmKEK;
 	if( !LoadKEK( &ymmKEK, pPEM, idKey, pin, numDigits ) )
 		return false;
+
+	StopPCSCD( );
 
 	Rijndael256_256_EncryptSingle( pymmKey, ymmKEK );
 	return true;

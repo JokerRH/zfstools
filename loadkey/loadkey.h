@@ -19,3 +19,8 @@ typedef struct
 
 unsigned ReadPIN( char pin[ 8 ] );
 bool LoadKey( block256_t *pymmKey, const pem_t *pPEM, unsigned char idKey );
+
+#ifndef WIN32
+#include <fcntl.h>
+int mkdirp( char *szPath, mode_t mode );
+#endif
