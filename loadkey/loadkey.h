@@ -17,8 +17,18 @@ typedef struct
 	unsigned char ab[ 65 ];
 } pem_t;
 
-unsigned ReadPIN( char pin[ 8 ] );
-bool LoadKey( block256_t *pymmKey, const pem_t *pPEM, unsigned char idKey );
+typedef struct { void *fSuccess; long _2; } yksession_t;
+
+unsigned YK_ReadPIN( char pin[ 8 ] );
+bool YK_StartPCSCD( void );
+void YK_StopPCSCD( void );
+bool YK_MakeYubikeyDev( void );
+
+bool YK_Login( yksession_t *pSession, const char *abPIN, unsigned numDigits );
+void YK_Logout( const yksession_t *pSession );
+bool YK_LoadPEM( const yksession_t *pSession, unsigned char idKey, pem_t *pPEM );
+bool YK_LoadKEK( const yksession_t *const pSession, const unsigned char idKey, const pem_t *const pPEM, block256_t *const pymmKEK );
+void YK_Unwrap( block256_t *pymmKey, block256_t ymmKEK );
 
 #ifndef WIN32
 #include <fcntl.h>

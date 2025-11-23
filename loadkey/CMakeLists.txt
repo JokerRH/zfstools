@@ -29,7 +29,7 @@ add_library( loadkey::loadkey ALIAS loadkey )
 find_package( PkgConfig REQUIRED )
 pkg_check_modules( YKCS11 REQUIRED IMPORTED_TARGET ykcs11 )
 
-target_sources( loadkey
+target_sources(loadkey
 	PUBLIC
 		FILE_SET public_headers
 		TYPE HEADERS
@@ -38,6 +38,15 @@ target_sources( loadkey
 			loadkey.h
 	PRIVATE
 		${CMAKE_CURRENT_SOURCE_DIR}/loadkey.c
+		${CMAKE_CURRENT_SOURCE_DIR}/unwrap.c
+
+		$<$<PLATFORM_ID:Windows>:${CMAKE_CURRENT_SOURCE_DIR}/pcscd_win32.c>
+		$<$<PLATFORM_ID:Windows>:${CMAKE_CURRENT_SOURCE_DIR}/readpin_win32.c>
+		$<$<PLATFORM_ID:Windows>:${CMAKE_CURRENT_SOURCE_DIR}/makedev_win32.c>
+
+		$<$<NOT:$<PLATFORM_ID:Windows>>:${CMAKE_CURRENT_SOURCE_DIR}/pcscd.c>
+		$<$<NOT:$<PLATFORM_ID:Windows>>:${CMAKE_CURRENT_SOURCE_DIR}/readpin.c>
+		$<$<NOT:$<PLATFORM_ID:Windows>>:${CMAKE_CURRENT_SOURCE_DIR}/makedev.c>
 )
 
 target_include_directories( loadkey PRIVATE ${CMAKE_SOURCE_DIR}/shared )

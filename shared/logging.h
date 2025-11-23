@@ -13,6 +13,10 @@
 #define	LOG_INFO	6	/* informational */
 #define	LOG_DEBUG	7	/* debug-level messages */
 
+#define LOG_CONS	0
+#define LOG_PERROR	1
+#define LOG_USER	2
+
 inline void syslog( int priority, const char *format, ... )
 {
 	va_list args;
@@ -25,14 +29,17 @@ inline void syslog( int priority, const char *format, ... )
 	case LOG_ERR:
 		fputs( "[Error] ", stderr );
 		vfprintf( stderr, format, args );
+		fputs( "\n", stderr );
 		break;
 	case LOG_WARNING:
 		fputs( "[Warning] ", stderr );
 		vfprintf( stderr, format, args );
+		fputs( "\n", stderr );
 		break;
 	default:
 		fputs( "[Info] ", stdout );
 		vfprintf( stdout, format, args );
+		fputs( "\n", stdout );
 		break;
 	}
 	

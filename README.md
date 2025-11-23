@@ -2,10 +2,11 @@
 # zfstools
 
 This repository contains a collection of tools indended for minimal server builds to load a key using a YubiKey, then import and mount ZFS pools with encrypted datasets.
+The libraries and executables that do not depend on ZFS can be compiled and executed on Windows, too.
 
 ## Library loadkey
 This library allows deriving a Key Encryption Key (KEK) from a YubiKey certificate slot (9a, 9c, 9d or 9e). 
-This KEK is then used to unpack a wrapped dataset encryption key. Note that this unpack operation is **not** a decryption, but rather an encryption using a 256bit Rijndael cipher (the algorithm chosen for AES). The operations are reversible, meaning there is no security difference to decryption first, then encryption to get the plaintext back. However, an encryption can be performed straight forward, while a decryption requires a reversed key schedule. As such, the wrapped key provided to a call to **LoadKey** must have been wrapped using a 256 bit Rijndael decryption operation.
+This KEK can then used to unpack a wrapped key using **YK_Unwrap**. Note that this unpack operation is **not** a decryption, but rather an encryption using a 256bit Rijndael cipher (the algorithm chosen for AES). The operations are reversible, meaning there is no security difference to decryption first, then encryption to get the plaintext back. However, an encryption can be performed straight forward, while a decryption requires a reversed key schedule. As such, the wrapped key provided to a call to **YK_Unwrap** must have been wrapped using a 256 bit Rijndael decryption operation.
 
 Note that unfortunately, yubico-piv-tool does not expose the necessary headers for pkcs11. You will need to add
 ```
@@ -23,7 +24,7 @@ Cflags: -I${includedir}
 
 The following options must be provided to cmake:
 ### DEBUG_KEY
-This optional option allows providing a test key directly. If this option is set, no attempt will be made to query a YubiKey. Instead, the value of DEBUG_KEY is returned immediately.
+This optional option allows providing a test key directly. If this option is set, no attempt will be made to query a YubiKey. Instead, the value of DEBUG_KEY is returned as KEK by **YK_LoadKEK** immediately.
 Example cmake option: -DDEBUG_KEY=DEADBEEFADECAFC0FFEEDEFACEDECADE0001020305060708090A0B0C0D0E1011
 
 ## Library zfstools
@@ -57,7 +58,7 @@ The value you type will be interpreted as hexadecimal.
 Example cmake option: -DID_KEY=03
 
 ### PEM
-To derive the KEK, the public key from the Privacy-Enhanced Mail (PEM) file is needed. You can generate it using the keysetup tool. It could be extracted automatically (as keysetup does), but is tied to the wrapped key anyways. As such, it was chosen to be hardcoded to simplify this essential tool.
+To derive the KEK, the public key from the Privacy-Enhanced Mail (PEM) file is needed. You can generate it using the keysetup tool. It could be extracted automatically (using loadkey's **YK_LoadPEM**), but is tied to the wrapped key anyways. As such, it was chosen to be hardcoded to reduce runtime error sources.
 Example cmake option: -DPEM=04164754C5DE45D1683D2AC40FDD8BFA80B0199D9719CD0B19DC051A83ABF101020AAB4F74F8C000B7231AC460526AA51FC9F9F47C294C811887AB29A2F1D88B5C
 ### KEY_WRAPPED
 The wrapped key that will be decrypted using loadkey. You can wrap your own key using the keysetup tool.

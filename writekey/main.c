@@ -16,10 +16,12 @@ static const pem_t g_pem = { PEM };
 int main( int argc, char *argv[ ] )
 {
 	openlog( "writekey", LOG_CONS | LOG_PERROR, LOG_USER );
+	int iRet = EXIT_SUCCESS;
 
 	if( argc < 2 )
 	{
 		syslog( LOG_ERR, "Insufficient arguments. Please provide the file that shall receive the unwrapped binary key." );
+		iRet = EXIT_FAILURE;
 		goto ERROR_AFTER_LOG;
 	}
 
@@ -27,30 +29,54 @@ int main( int argc, char *argv[ ] )
 	if( fd < 0 )
 	{
 		syslog( LOG_ERR, "Failed to open output file \"%s\".", argv[ 1 ] );
+		iRet = EXIT_FAILURE;
 		goto ERROR_AFTER_LOG;
 	}
 
-	if( !LoadKey( &g_ymmKey, &g_pem, ID_KEY ) )
+	if( !YK_StartPCSCD( ) )
+	{
+		iRet = EXIT_FAILURE;
 		goto ERROR_AFTER_FILE;
+	}
+	if( !YK_MakeYubikeyDev( ) )
+	{
+		iRet = EXIT_FAILURE;
+		goto ERROR_AFTER_PCSCD;
+	}
+
+	char abPIN[ 8 ];
+	const unsigned numDigits = YK_ReadPIN( abPIN );
+
+	yksession_t session;
+	if( !YK_Login( &session, abPIN, numDigits ) )
+	{
+		iRet = EXIT_FAILURE;
+		goto ERROR_AFTER_PCSCD;
+	}
+
+	block256_t ymmKEK;
+	if( !YK_LoadKEK( &session, ID_KEY, &g_pem, &ymmKEK ) )
+	{
+		iRet = EXIT_FAILURE;
+		goto ERROR_AFTER_LOGIN;
+	}
+
+	YK_Unwrap( &g_ymmKey, ymmKEK );
 
 	if( write( fd, g_ymmKey.ab, sizeof( g_ymmKey ) ) != sizeof( g_ymmKey ) )
 	{
 		syslog( LOG_ERR, "Failed to write unwrapped key to output file \"%s\".", argv[ 1 ] );
-		goto ERROR_AFTER_FILE;
+		iRet = EXIT_FAILURE;
+		goto ERROR_AFTER_LOGIN;
 	}
 
-	if( close( fd ) < 0 )
-	{
-		syslog( LOG_ERR, "Failed to close output file \"%s\".", argv[ 1 ] );
-		goto ERROR_AFTER_LOG;
-	}
-
-	closelog( );
-	return EXIT_SUCCESS;
-
+ERROR_AFTER_LOGIN:
+	YK_Logout( &session );
+ERROR_AFTER_PCSCD:
+	YK_StopPCSCD( );
 ERROR_AFTER_FILE:
 	close( fd );
 ERROR_AFTER_LOG:
 	closelog( );
-	return EXIT_FAILURE;
+	return iRet;
 }

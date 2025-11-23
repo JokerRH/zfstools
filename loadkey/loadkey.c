@@ -1,438 +1,41 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <ctype.h>
-#include <string.h>
-#include <errno.h>
-#include <signal.h>
-#include <fcntl.h>
 #include <ykpiv/pkcs11y.h>
-#include <wmmintrin.h>
-#include <emmintrin.h>
-#include <smmintrin.h>
+#include <string.h>
+#include <assert.h>
 #include "loadkey.h"
 #include "logging.h"
 
-#ifdef WIN32
-#	include <Windows.h>
-#else
-#	include <unistd.h>
-#	include <termios.h>
-#	include <linux/prctl.h>
-#	include <sys/prctl.h>
-#	include <sys/stat.h>
-#	include <sys/sysmacros.h>
-#	include <sys/types.h>
-#	include <dirent.h>
-#	include <signal.h>
-#endif
-
-#define USB_DEV_ROOT	"/sys/bus/usb/devices/"
-#define USB_DEV_NODE	"/dev/bus/usb/"
-#define YUBIKEY_VENDOR	"1050"
-
-#define XMMLO( ymm )	( ( (__m128i *) &( ymm ) )[ 0 ] )
-#define XMMHI( ymm )	( ( (__m128i *) &( ymm ) )[ 1 ] )
-
-unsigned ReadPIN( char pin[ 8 ] )
-{
-#ifdef WIN32
-	const HANDLE hStdin = GetStdHandle( STD_INPUT_HANDLE );
-
-	//Save original console mode
-	DWORD dwMode;
-	GetConsoleMode( hStdin, &dwMode );
-	const DWORD dwPreviousMode = dwMode;
-
-	// Disable line input and echo
-	dwMode &= ~( ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT );
-	SetConsoleMode( hStdin, dwMode );
-
-	fputs( "Enter YubiKey PIN (6-8 digits): ", stdout );
-	fflush( stdout );
-
-	unsigned numDigits = 0;
-	while( true )
-	{
-		INPUT_RECORD ir;
-		DWORD count;
-
-		ReadConsoleInput( hStdin, &ir, 1, &count );
-
-		if( ir.EventType != KEY_EVENT || !ir.Event.KeyEvent.bKeyDown )
-			continue;  //Only process key-down events
-
-		const char c = ir.Event.KeyEvent.uChar.AsciiChar;
-		if( c >= '0' && c <= '9' && numDigits < 8 )
-		{
-			pin[ numDigits++ ] = c;
-			putchar( '*' );
-			fflush( stdout );
-		}
-		else if( ( c == '\r' || c == '\n' ) && numDigits >= 6 )
-		{
-			putchar( '\n' );
-			break;
-		}
-		else if( ir.Event.KeyEvent.wVirtualKeyCode == VK_BACK && numDigits > 0 )
-		{
-			--numDigits;
-			printf( "\b \b" );
-			fflush( stdout );
-		}
-	}
-
-	// Restore original console mode
-	SetConsoleMode( hStdin, dwPreviousMode );
-	return numDigits;
-#else
-	struct termios oldt;
-	{
-		tcgetattr( STDIN_FILENO, &oldt );	//Save original configuration
-		
-		struct termios newt = oldt;
-		newt.c_lflag &= ~( ICANON | ECHO );	//Disable canonical mode & echo
-		newt.c_cc[ VMIN ] = 1;				// read returns after 1 char
-		newt.c_cc[ VTIME ] = 0;				// no timeout
-		tcsetattr( STDIN_FILENO, TCSANOW, &newt );
-	}
-
-	fputs( "Enter YubiKey PIN (6-8 digits): ", stdout );
-	fflush( stdout );
-
-	unsigned numDigits = 0;
-	while( 1 )
-	{
-		const int c = getchar( );
-		if( c >= '0' && c <= '9' && numDigits < 8 )
-		{
-			pin[ numDigits++ ] = c;
-			putchar( '*' );
-			fflush( stdout );
-		}
-		else if( c == '\n' && numDigits >= 6 )
-		{
-			putchar('\n');
-			break;
-		}
-		else if( ( c == 127 || c == 8 ) && numDigits > 0 )
-		{
-			//Backspace
-			--numDigits;
-			fputs( "\b \b", stdout );
-			fflush( stdout );
-		}
-	}
-
-	tcsetattr( STDIN_FILENO, TCSANOW, &oldt );
-	return numDigits;
-#endif
-}
-
-#ifndef WIN32
-/*!
-	\param szPath	The path to create. On error, this string is shortened to the subpath that failed.
-*/
-int mkdirp( char *szPath, mode_t mode )
-{
-	for( char *pSeparator = szPath[ 0 ] == '/' ? szPath + 1 : szPath; *pSeparator; ++pSeparator )
-	{
-		if( pSeparator[ 0 ] != '/' )
-			continue;
-
-		pSeparator[ 0 ] = '\0';
-		if( mkdir( szPath, mode ) && errno != EEXIST )
-			return -1;
-
-		pSeparator[ 0 ] = '/';
-	}
-
-	return mkdir( szPath, mode );
-}
-
-/*!
-	\brief Searches for a USB device based on Yubico vendor id and creates the corresponding device node for it
-*/
-static bool MakeYubikeyDev( void )
-{
-	DIR *const pDir = opendir( USB_DEV_ROOT );
-	if( !pDir )
-	{
-		syslog( LOG_ERR, "Failed to open usb sys device folder." );
-		return false;
-	}
-
-	FILE *f;
-	for( struct dirent *pEntry; pEntry = readdir( pDir ); )
-	{
-		if( pEntry->d_type != DT_LNK )
-			continue;
-
-		char szPath[ 256 ];
-		char *szDetails;
-		{
-			const int numChars = snprintf( szPath, sizeof( szPath ), USB_DEV_ROOT "%s/idVendor", pEntry->d_name );
-			if( numChars < 0 || numChars >= sizeof( szPath ) )
-			{
-				syslog( LOG_WARNING, "Failed to format usb vendor path. Skipping device." );
-				continue;
-			}
-
-			szDetails = szPath + numChars - sizeof( "idVendor" ) + 1;
-		}
-
-		//Check vendor id
-		{
-			f = fopen( szPath, "r" );
-			if( !f )
-				continue;
-
-			{
-				char abVendor[ sizeof( YUBIKEY_VENDOR ) ];
-				if( !fgets( abVendor, sizeof( abVendor ), f ) )
-				{
-					fclose( f );
-					syslog( LOG_WARNING, "Failed to read usb vendor file. Skipping device." );
-					continue;
-				}
-				
-				if( feof( f ) )
-				{
-					fclose( f );
-					syslog( LOG_WARNING, "Reached end-of-file while reading usb vendor file. Skipping device." );
-					continue;
-				}
-
-				if( memcmp( YUBIKEY_VENDOR, abVendor, sizeof( YUBIKEY_VENDOR ) ) )
-					continue;
-			}
-			fclose( f );
-		}
-
-		//Read busnum
-		int busnum;
-		{
-			//Ensure that the new value (here: "busnum") is no longer than "idVendor"!
-			memcpy( szDetails, "busnum", sizeof( "busnum" ) );
-			f = fopen( szPath, "r" );
-			if( !f )
-			{
-				syslog( LOG_WARNING, "Failed to open busnum of Yubico device. Skipping device." );
-				continue;
-			}
-
-			if( fscanf( f, "%d", &busnum ) == EOF )
-			{
-				syslog( LOG_WARNING, "Failed to read busnum of Yubico device. Skipping device." );
-				fclose( f );
-				continue;
-			}
-			fclose( f );
-		}
-
-		//Read devnum
-		int devnum;
-		{
-			//Ensure that the new value (here: "devnum") is no longer than "idVendor"!
-			memcpy( szDetails, "devnum", sizeof( "devnum" ) );
-			f = fopen( szPath, "r" );
-			if( !f )
-			{
-				syslog( LOG_WARNING, "Failed to open devnum of Yubico device. Skipping device." );
-				continue;
-			}
-
-			if( fscanf( f, "%d", &devnum ) == EOF )
-			{
-				syslog( LOG_WARNING, "Failed to read devnum of Yubico device. Skipping device." );
-				fclose( f );
-				continue;
-			}
-			fclose( f );
-		}
-
-		// Calculate major/minor
-		const int idMajor = 189;
-		const int idMinor = ( busnum - 1 ) * 32 + ( devnum - 1 );
-
-		//Create the /dev bus folder
-		const int numBusChars = snprintf( szPath, sizeof( szPath ), USB_DEV_NODE "%03d", busnum );
-		if( numBusChars < 0 || numBusChars >= sizeof( szPath ) )
-		{
-			syslog( LOG_ERR, "Failed to format device bus path." );
-			goto ERROR_AFTER_DIR;
-		}
-		if( mkdirp( szPath, 0755 ) && errno != EEXIST )
-		{
-			syslog( LOG_ERR, "Failed to create device bus path \"%s\". Error code %d.", szPath, errno );
-			goto ERROR_AFTER_DIR;
-		}
-
-		//Create the device node
-		{
-			const int numChars = snprintf( szPath + numBusChars, sizeof( szPath ) - numBusChars, "/%03d", devnum );
-			if( numChars < 0 || numChars >= sizeof( szPath ) - numBusChars )
-			{
-				syslog( LOG_ERR, "Failed to format device node path." );
-				goto ERROR_AFTER_DIR;
-			}
-		}
-
-		umask( 0000 );
-		if( mknod( szPath, S_IFCHR | 0666, makedev( idMajor, idMinor ) ) && errno != EEXIST )
-		{
-			syslog( LOG_ERR, "Failed to create device node \"%s\".", szPath );
-			goto ERROR_AFTER_DIR;
-		}
-
-		closedir( pDir );
-		return true;
-	}
-
-	syslog( LOG_ERR, "Failed to find a connected yubikey." );
-
-ERROR_AFTER_DIR:
-	closedir( pDir );
-	return false;
-}
-#endif
-
-static bool StartPCSCD( void )
-{
-#ifdef WIN32
-	return true;
-#else
-	const pid_t ppid = getpid( );
-	
-	//Fork process to start pcscd
-	{
-		const pid_t pid = fork( );
-		if( pid < 0 )
-		{
-			syslog( LOG_ERR, "Failed to fork process." );
-			return false;
-		}
-		if( pid )
-			return true;	//Parent process
-	}
-	//Child process from here on
-	
-	//Ensure the child terminates with the parent
-	{
-		if( prctl( PR_SET_PDEATHSIG, SIGTERM ) )
-		{
-			syslog( LOG_ERR, "Failed to set parent-death signal." );
-			_exit( EXIT_FAILURE );
-		}
-
-		//Check if parent already died
-		if( getppid( ) != ppid )
-			_exit( EXIT_SUCCESS );
-	}
-
-	static char *const s_aszArg[ ] = { "-x", "--force-reader-polling", NULL };
-	static char *const s_aszNullEnvP[ ] = { NULL };
-	(void)! execve( "/sbin/pcscd", s_aszArg, s_aszNullEnvP );
-
-	//If we reach this point, execve failed. Print error message and exit
-	syslog( LOG_ERR, "Failed to start pcscd." );
-	_exit( EXIT_FAILURE );
-#endif
-}
-
-static void StopPCSCD( void )
-{
-#ifndef WIN32
-	//Read pid
-	//Layout at the time of opening the stat file: "/proc/" pid "/stat" (including a terminating NULL). The pid is an integer and should not be larger than 10 digits, but the pid file may contain further characters (e.g. '\n').
-	//Expected layout after reading the stat file: pid " (pcscd)" (doesn't need a terminating NULL).
-	//Ensure that the buffer is large enough to encompass this, but also not so large that the /proc/pid/stat file can fully fit (in that case adjust the test for file size below)
-	char ab[ 32 ] = "/proc/";
-	char *const abPID = ab + sizeof( "/proc/" ) - 1;
-	ssize_t numChars;
-	{
-		const int fd = open( "/run/pcscd/pcscd.pid", O_RDONLY | O_CLOEXEC );
-		numChars = read( fd, abPID, sizeof( ab ) - ( abPID - ab ) );
-		close( fd );
-
-		if( numChars < 0 )
-		{
-			syslog( LOG_WARNING, "Failed to read pcscd pid." );
-			return;
-		}
-		else if( numChars >= sizeof( ab ) - ( abPID - ab ) )
-		{
-			syslog( LOG_WARNING, "Failed to read pcscd pid: File content is larger than expected." );
-			return;
-		}
-	}
-
-	//Ensure the file contains just a number (pid)
-	{
-		bool fValid = false;
-		for( ssize_t i = 0; i < numChars; ++i )
-			if( abPID[ i ] < '0' || abPID[ i ] > '9' )
-			{
-				if( fValid )
-				{
-					numChars = i;
-					break;
-				}
-				syslog( LOG_WARNING, "Failed to read pcscd pid: File content is not a valid pid." );
-				return;
-			}
-			else
-				fValid = true;
-	}
-	const pid_t pid = atoi( abPID );
-
-	//Load the content of the /proc/pid/stat file
-	memcpy( abPID + numChars, "/stat", sizeof( "/stat" ) );
-	{
-		const int fd = open( ab, O_RDONLY | O_CLOEXEC );
-		const ssize_t numRead = read( fd, ab, sizeof( ab ) );
-		close( fd );
-
-		if( numRead != sizeof( ab ) )
-		{
-			syslog( LOG_WARNING, "Failed to validate pcscd pid: The corresponding stat file is too short." );
-			return;
-		}
-	}
-
-	//Ensure the pid matches pcscd
-	if( memcmp( ab + numChars, " (pcscd)", sizeof( " (pcscd)" ) - 1 ) )
-	{
-		syslog( LOG_WARNING, "Failed to validate pcscd pid: The pid in the daemon pid file does not match pcscd." );
-		return;
-	}
-
-	//Kill pcscd
-	if( kill( pid, SIGTERM ) < 0 )
-		syslog( LOG_WARNING, "Failed to terminate pcscd." );
-#endif
-}
-
-static bool LoadKEK( block256_t *const pKEK, const pem_t *const pPEM, const unsigned char idKey, const CK_UTF8CHAR_PTR abPIN, const size_t numDigits )
+struct yksession_s
 {
 	CK_FUNCTION_LIST_PTR funcs;
-	if( C_GetFunctionList( &funcs ) != CKR_OK )
+	CK_SESSION_HANDLE hSession;
+};
+static_assert( sizeof( struct yksession_s ) == sizeof( yksession_t ), "yksession size mismatch" );
+
+bool YK_Login( yksession_t *const pSession, const char *const abPIN, const unsigned numDigits )
+{
+#ifdef DEBUG_KEY
+	return true;
+#endif
+
+	struct yksession_s *p = (struct yksession_s *) pSession;
+
+	if( C_GetFunctionList( &p->funcs ) != CKR_OK )
 	{
 		syslog( LOG_ERR, "Failed to load ykcs11 function list." );
 		return false;
 	}
 
-	if( funcs->C_Initialize( NULL ) != CKR_OK )
+	if( p->funcs->C_Initialize( NULL ) != CKR_OK )
 	{
 		syslog( LOG_ERR, "Failed to initialize ykcs11." );
 		return false;
 	}
 
 	//Open session
-	CK_SESSION_HANDLE hSession;
 	{
 		CK_SLOT_ID idSlot;
 		CK_ULONG numSlots = 1;
-		switch( funcs->C_GetSlotList( CK_TRUE, &idSlot, &numSlots ) )
+		switch( p->funcs->C_GetSlotList( CK_TRUE, &idSlot, &numSlots ) )
 		{
 		case CKR_OK:
 			break;
@@ -450,18 +53,109 @@ static bool LoadKEK( block256_t *const pKEK, const pem_t *const pPEM, const unsi
 			goto ERROR_AFTER_INIT;
 		}
 
-		if( funcs->C_OpenSession( idSlot, CKF_SERIAL_SESSION | CKF_RW_SESSION, NULL, NULL, &hSession ) != CKR_OK )
+		if( p->funcs->C_OpenSession( idSlot, CKF_SERIAL_SESSION | CKF_RW_SESSION, NULL, NULL, &p->hSession ) != CKR_OK )
 		{
 			syslog( LOG_ERR, "Failed to open ykcs11 session." );
 			goto ERROR_AFTER_INIT;
 		}
 	}
 
-	if( funcs->C_Login( hSession, CKU_USER, abPIN, numDigits ) != CKR_OK )
+	if( p->funcs->C_Login( p->hSession, CKU_USER, (char *) abPIN, numDigits ) != CKR_OK )
 	{
 		syslog( LOG_ERR, "Failed to login in ykcs11 session." );
 		goto ERROR_AFTER_SESSION;
 	}
+
+	return true;
+
+ERROR_AFTER_SESSION:
+	p->funcs->C_CloseSession( p->hSession );
+ERROR_AFTER_INIT:
+	p->funcs->C_Finalize( NULL );
+	return false;
+}
+
+void YK_Logout( const yksession_t *const pSession )
+{
+#ifdef DEBUG_KEY
+	return;
+#endif
+
+	struct yksession_s *p = (struct yksession_s *) pSession;
+	p->funcs->C_Logout( p->hSession );
+	p->funcs->C_CloseSession( p->hSession );
+	p->funcs->C_Finalize( NULL );
+}
+
+bool YK_LoadPEM( const yksession_t *const pSession, const unsigned char idKey, pem_t *const pPEM )
+{
+#ifdef DEBUG_KEY
+	return false;
+#endif
+
+	struct yksession_s *p = (struct yksession_s *) pSession;
+
+	//Find the public key
+	CK_OBJECT_HANDLE hKeyPublic;
+	{
+		CK_OBJECT_CLASS key_class = CKO_PUBLIC_KEY;
+		CK_KEY_TYPE key_type = CKK_EC;
+		CK_ATTRIBUTE key_template[ ] =
+		{
+			{ CKA_CLASS, &key_class, sizeof( key_class ) },
+			{ CKA_KEY_TYPE, &key_type, sizeof( key_type ) },
+			{ CKA_ID, (CK_VOID_PTR) &idKey, sizeof( unsigned char ) }
+		};
+
+		if( p->funcs->C_FindObjectsInit( p->hSession, key_template, sizeof( key_template ) / sizeof( CK_ATTRIBUTE ) ) != CKR_OK )
+		{
+			syslog( LOG_ERR, "Failed to find public key for key slot %u.\n", idKey );
+			return false;
+		}
+
+		CK_ULONG numFound;
+		if( p->funcs->C_FindObjects( p->hSession, &hKeyPublic, 1, &numFound ) != CKR_OK || numFound != 1 )
+		{
+			syslog( LOG_ERR, "Failed to find public key for key slot %u.\n", idKey );
+			return false;
+		}
+
+		p->funcs->C_FindObjectsFinal( p->hSession );
+	}
+
+	CK_ATTRIBUTE ecPointAttr = { CKA_EC_POINT, NULL, 0 };
+	if( p->funcs->C_GetAttributeValue( p->hSession, hKeyPublic, &ecPointAttr, 1 ) != CKR_OK )
+	{
+		syslog( LOG_ERR, "Failed to get EC point attribute for key slot %u.\n", idKey );
+		return false;
+	}
+
+	if( ecPointAttr.ulValueLen != 67 )
+	{
+		syslog( LOG_ERR, "EC point attribute of key slot %u has length %lu. Expected was 67. Please choose a 256 bit ECC key.\n", idKey, ecPointAttr.ulValueLen );
+		return false;
+	}
+
+	unsigned char abPoint[ 67 ];
+	ecPointAttr.pValue = abPoint;
+	if( p->funcs->C_GetAttributeValue( p->hSession, hKeyPublic, &ecPointAttr, 1 ) != CKR_OK )
+	{
+		syslog( LOG_ERR, "Failed to get EC point attribute for key slot %u.\n", idKey );
+		return false;
+	}
+
+	memcpy( pPEM->ab, abPoint + 2, sizeof( pem_t ) );
+	return true;
+}
+
+bool YK_LoadKEK( const yksession_t *const pSession, const unsigned char idKey, const pem_t *const pPEM, block256_t *const pymmKEK )
+{
+#ifdef DEBUG_KEY
+	*pymmKEK = (block256_t) { DEBUG_KEY };
+	return true;
+#endif
+
+	struct yksession_s *p = (struct yksession_s *) pSession;
 
 	//Find private key
 	CK_OBJECT_HANDLE hKeyPrivate;
@@ -475,20 +169,20 @@ static bool LoadKEK( block256_t *const pKEK, const pem_t *const pPEM, const unsi
 			{ CKA_ID, (CK_VOID_PTR) &idKey, sizeof( unsigned char ) }
 		};
 
-		if( funcs->C_FindObjectsInit( hSession, key_template, sizeof( key_template ) / sizeof( CK_ATTRIBUTE ) ) != CKR_OK )
+		if( p->funcs->C_FindObjectsInit( p->hSession, key_template, sizeof( key_template ) / sizeof( CK_ATTRIBUTE ) ) != CKR_OK )
 		{
-			syslog( LOG_ERR, "Failed to find private key." );
-			goto ERROR_AFTER_LOGIN;
+			syslog( LOG_ERR, "Failed to find private key for key slot %u.", idKey );
+			return false;
 		}
 
 		CK_ULONG numFound;
-		if( funcs->C_FindObjects( hSession, &hKeyPrivate, 1, &numFound ) != CKR_OK || numFound != 1 )
+		if( p->funcs->C_FindObjects( p->hSession, &hKeyPrivate, 1, &numFound ) != CKR_OK || numFound != 1 )
 		{
-			syslog( LOG_ERR, "Failed to find private key." );
-			goto ERROR_AFTER_LOGIN;
+			syslog( LOG_ERR, "Failed to find private key for key slot %u.", idKey );
+			return false;
 		}
 
-		funcs->C_FindObjectsFinal( hSession );
+		p->funcs->C_FindObjectsFinal( p->hSession );
 	}
 
 	//Derive KEK from private key
@@ -498,7 +192,7 @@ static bool LoadKEK( block256_t *const pKEK, const pem_t *const pPEM, const unsi
 		{
 			.kdf = CKD_NULL,
 			.pPublicData = (char *) pPEM->ab,
-			.ulPublicDataLen = sizeof( *pPEM )
+			.ulPublicDataLen = sizeof( pem_t )
 		};
 
 		CK_MECHANISM mech =
@@ -517,137 +211,21 @@ static bool LoadKEK( block256_t *const pKEK, const pem_t *const pPEM, const unsi
 			{ CKA_KEY_TYPE, &derived_type, sizeof( derived_type ) }
 		};
 
-		if( funcs->C_DeriveKey( hSession, &mech, hKeyPrivate, derived_tmpl, sizeof( derived_tmpl ) / sizeof( CK_ATTRIBUTE ), &hDerived ) != CKR_OK )
+		if( p->funcs->C_DeriveKey( p->hSession, &mech, hKeyPrivate, derived_tmpl, sizeof( derived_tmpl ) / sizeof( CK_ATTRIBUTE ), &hDerived ) != CKR_OK )
 		{
-			syslog( LOG_ERR, "Failed to derive KEK." );
-			goto ERROR_AFTER_LOGIN;
+			syslog( LOG_ERR, "Failed to derive KEK from key slot %u.", idKey );
+			return false;
 		}
 	}
 
 	{
-		CK_ATTRIBUTE attr = { CKA_VALUE, pKEK->ab, sizeof( block256_t ) };
-		if( funcs->C_GetAttributeValue( hSession, hDerived, &attr, sizeof( attr ) / sizeof( CK_ATTRIBUTE ) ) )
+		CK_ATTRIBUTE attr = { CKA_VALUE, pymmKEK->ab, sizeof( block256_t ) };
+		if( p->funcs->C_GetAttributeValue( p->hSession, hDerived, &attr, sizeof( attr ) / sizeof( CK_ATTRIBUTE ) ) )
 		{
-			syslog( LOG_ERR, "Failed to extract KEK." );
-			goto ERROR_AFTER_LOGIN;
+			syslog( LOG_ERR, "Failed to extract KEK from key slot %u.", idKey );
+			return false;
 		}
 	}
 
-	funcs->C_Logout( hSession );
-	funcs->C_CloseSession( hSession );
-	funcs->C_Finalize( NULL );
-
 	return true;
-
-ERROR_AFTER_LOGIN:
-	funcs->C_Logout( hSession );
-ERROR_AFTER_SESSION:
-	funcs->C_CloseSession( hSession );
-ERROR_AFTER_INIT:
-	funcs->C_Finalize( NULL );
-	return false;
-}
-
-static void Rijndael256_256_EncryptSingle( block256_t *pData, block256_t key )
-{
-	__m128i tmp1, tmp2;
-	const __m128i RIJNDAEL256_MASK = _mm_set_epi32( 0x03020d0c, 0x0f0e0908, 0x0b0a0504, 0x07060100 );
-	const __m128i BLEND_MASK = _mm_set_epi32( 0x80000000, 0x80800000, 0x80800000, 0x80808000 );
-	block256_t data = *pData;
-
-	//Round 0 (initial xor)
-	XMMLO( data ) = _mm_xor_si128( XMMLO( data ), XMMLO( key ) );
-	XMMHI( data ) = _mm_xor_si128( XMMHI( data ), XMMHI( key ) );
-
-	for( unsigned uRound = 1;; ++uRound )
-	{
-		//Blend to compensate for the shift rows shifts bytes between two 128 bit blocks
-		tmp1 = _mm_blendv_epi8( XMMLO( data ), XMMHI( data ), BLEND_MASK );
-		tmp2 = _mm_blendv_epi8( XMMHI( data ), XMMLO( data ), BLEND_MASK );
-
-		//Shuffle that compensates for the additional shift in rows 3 and 4 as opposed to Rijndael128 (AES)
-		XMMLO( data ) = _mm_shuffle_epi8( tmp1, RIJNDAEL256_MASK );
-		XMMHI( data ) = _mm_shuffle_epi8( tmp2, RIJNDAEL256_MASK );
-
-		//Perform key expansion
-		{
-			switch( uRound )
-			{
-			case  1: tmp1 = _mm_aeskeygenassist_si128( XMMHI( key ), 0x01 ); break;
-			case  2: tmp1 = _mm_aeskeygenassist_si128( XMMHI( key ), 0x02 ); break;
-			case  3: tmp1 = _mm_aeskeygenassist_si128( XMMHI( key ), 0x04 ); break;
-			case  4: tmp1 = _mm_aeskeygenassist_si128( XMMHI( key ), 0x08 ); break;
-			case  5: tmp1 = _mm_aeskeygenassist_si128( XMMHI( key ), 0x10 ); break;
-			case  6: tmp1 = _mm_aeskeygenassist_si128( XMMHI( key ), 0x20 ); break;
-			case  7: tmp1 = _mm_aeskeygenassist_si128( XMMHI( key ), 0x40 ); break;
-			case  8: tmp1 = _mm_aeskeygenassist_si128( XMMHI( key ), 0x80 ); break;
-			case  9: tmp1 = _mm_aeskeygenassist_si128( XMMHI( key ), 0x1B ); break;
-			case 10: tmp1 = _mm_aeskeygenassist_si128( XMMHI( key ), 0x36 ); break;
-			case 11: tmp1 = _mm_aeskeygenassist_si128( XMMHI( key ), 0x6C ); break;
-			case 12: tmp1 = _mm_aeskeygenassist_si128( XMMHI( key ), 0xD8 ); break;
-			case 13: tmp1 = _mm_aeskeygenassist_si128( XMMHI( key ), 0xAB ); break;
-			case 14: tmp1 = _mm_aeskeygenassist_si128( XMMHI( key ), 0x4D ); break;
-			}
-
-			tmp1 = _mm_shuffle_epi32( tmp1, 0xff );
-			tmp2 = _mm_slli_si128( XMMLO( key ), 0x4 );
-			XMMLO( key ) = _mm_xor_si128( XMMLO( key ), tmp2 );
-			tmp2 = _mm_slli_si128( tmp2, 0x4 );
-			XMMLO( key ) = _mm_xor_si128( XMMLO( key ), tmp2 );
-			tmp2 = _mm_slli_si128( tmp2, 0x4 );
-			XMMLO( key ) = _mm_xor_si128( XMMLO( key ), tmp2 );
-			XMMLO( key ) = _mm_xor_si128( XMMLO( key ), tmp1 );
-
-			tmp2 = _mm_aeskeygenassist_si128( XMMLO( key ), 0x0 );
-			tmp1 = _mm_shuffle_epi32( tmp2, 0xaa );
-			tmp2 = _mm_slli_si128( XMMHI( key ), 0x4 );
-			XMMHI( key ) = _mm_xor_si128( XMMHI( key ), tmp2 );
-			tmp2 = _mm_slli_si128( tmp2, 0x4 );
-			XMMHI( key ) = _mm_xor_si128( XMMHI( key ), tmp2 );
-			tmp2 = _mm_slli_si128( tmp2, 0x4 );
-			XMMHI( key ) = _mm_xor_si128( XMMHI( key ), tmp2 );
-			XMMHI( key ) = _mm_xor_si128( XMMHI( key ), tmp1 );
-		}
-
-		if( uRound >= 14 )
-			break;
-
-		//This is the encryption step that includes sub bytes, shift rows, mix columns, xor with round key
-		XMMLO( data ) = _mm_aesenc_si128( XMMLO( data ), XMMLO( key ) );
-		XMMHI( data ) = _mm_aesenc_si128( XMMHI( data ), XMMHI( key ) );
-	}
-
-	//Last AES round
-	XMMLO( *pData ) = _mm_aesenclast_si128( XMMLO( data ), XMMLO( key ) );
-	XMMHI( *pData ) = _mm_aesenclast_si128( XMMHI( data ), XMMHI( key ) );
-}
-
-bool LoadKey( block256_t *const pymmKey, const const pem_t *const pPEM, const unsigned char idKey )
-{
-#ifdef DEBUG_KEY
-	static const block256_t ymmKey = DEBUG_KEY;
-	*pymmKey = ymmKey;
-	return true;
-#else
-
-#ifndef WIN32
-	if( !MakeYubikeyDev( ) )
-		return false;
-#endif
-
-	if( !StartPCSCD( ) )
-		return false;
-
-	char pin[ 8 ];
-	const unsigned numDigits = ReadPIN( pin );
-
-	block256_t ymmKEK;
-	if( !LoadKEK( &ymmKEK, pPEM, idKey, pin, numDigits ) )
-		return false;
-
-	StopPCSCD( );
-
-	Rijndael256_256_EncryptSingle( pymmKey, ymmKEK );
-	return true;
-#endif
 }

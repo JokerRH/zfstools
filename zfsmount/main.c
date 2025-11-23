@@ -16,9 +16,35 @@ int main( int argc, char *argv[ ] )
 {
 	openlog( "zfsmount", LOG_CONS, LOG_DAEMON );
 
-	if( !LoadKey( &g_ymmKey, &g_PEM, ID_KEY ) )
-		goto ERROR_AFTER_LOG;
+	//Load KEK
+	block256_t ymmKEK;
+	{
+		if( !YK_StartPCSCD( ) )
+			goto ERROR_AFTER_LOG;
+		if( !YK_MakeYubikeyDev( ) )
+			goto ERROR_AFTER_PCSCD;
 
+		char abPIN[ 8 ];
+		const unsigned numDigits = YK_ReadPIN( abPIN );
+
+		yksession_t session;
+		if( !YK_Login( &session, abPIN, numDigits ) )
+			goto ERROR_AFTER_PCSCD;
+
+		if( !YK_LoadKEK( &session, ID_KEY, &g_PEM, &ymmKEK ) )
+		{
+ERROR_AFTER_LOGIN:
+			YK_Logout( &session );
+ERROR_AFTER_PCSCD:
+			YK_StopPCSCD( );
+			goto ERROR_AFTER_LOG;
+		}
+
+		YK_Logout( &session );
+		YK_StopPCSCD( );
+		return true;
+	}
+	
 	if( libzfs_core_init( ) )
 	{
 		syslog( LOG_ERR, "Failed to initialize ZFS core." );
@@ -36,6 +62,7 @@ int main( int argc, char *argv[ ] )
 	if( !ImportPool( fdZFS, XSTR( POOL_VDEVS ), XSTR( POOL_NAME ), POOL_ID ) )
 		goto ERROR_AFTER_FD;
 
+	YK_Unwrap( &g_ymmKey, ymmKEK );
 	if( !LoadPoolKey( XSTR( POOL_NAME ), g_ymmKey ) )	
 		goto ERROR_AFTER_FD;
 
