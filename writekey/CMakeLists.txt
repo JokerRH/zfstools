@@ -6,8 +6,8 @@ if( NOT DEFINED PEM )
 	message( FATAL_ERROR "PEM not defined" )
 endif( )
 
-if( NOT DEFINED KEY_WRAPPED )
-	message( FATAL_ERROR "KEY_WRAPPED not defined" )
+if( NOT DEFINED DATASET_CALLS )
+	message( FATAL_ERROR "DATASETS not defined" )
 endif( )
 
 #
@@ -21,12 +21,11 @@ target_sources( writekey
 )
 
 target_include_directories( writekey PRIVATE ${CMAKE_SOURCE_DIR}/shared )
-target_link_libraries( writekey PRIVATE loadkey )
+target_link_libraries( writekey PRIVATE loadkey shared )
 target_compile_definitions( writekey
 	PRIVATE
 		ID_KEY=0x${ID_KEY}
 		"PEM={${PEM_BYTES}}"
-		"KEY_WRAPPED={${KEY_WRAPPED_BYTES}}"
 )
 
 install( TARGETS writekey

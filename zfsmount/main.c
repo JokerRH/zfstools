@@ -9,8 +9,15 @@
 #define XSTR( a ) STR( a )
 #define STR( a ) #a
 
-static block256_t g_ymmKey = { KEY_WRAPPED };
 static const pem_t g_PEM = { PEM };
+
+#define DATASET( szDataset, ymmKey, szPath )	if( !LoadWrappedKey( ymmKEK, szDataset, ymmKey ) ) goto ERROR_AFTER_FD;
+
+static inline bool LoadWrappedKey( const block256_t ymmKEK, const char *const szDataset, block256_t ymmKey )
+{
+	YK_Unwrap( &ymmKey, ymmKEK );
+	return LoadPoolKey( szDataset, ymmKey );
+}
 
 int main( int argc, char *argv[ ] )
 {
@@ -42,7 +49,6 @@ ERROR_AFTER_PCSCD:
 
 		YK_Logout( &session );
 		YK_StopPCSCD( );
-		return true;
 	}
 	
 	if( libzfs_core_init( ) )
@@ -62,9 +68,8 @@ ERROR_AFTER_PCSCD:
 	if( !ImportPool( fdZFS, XSTR( POOL_VDEVS ), XSTR( POOL_NAME ), POOL_ID ) )
 		goto ERROR_AFTER_FD;
 
-	YK_Unwrap( &g_ymmKey, ymmKEK );
-	if( !LoadPoolKey( XSTR( POOL_NAME ), g_ymmKey ) )	
-		goto ERROR_AFTER_FD;
+	//Automatically generated DATASET calls
+#	include <shared/datasets.h>
 
 	if( !MountPool( fdZFS, XSTR( POOL_NAME ) ) )
 		goto ERROR_AFTER_FD;

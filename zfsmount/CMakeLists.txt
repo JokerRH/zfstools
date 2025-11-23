@@ -18,8 +18,8 @@ if( NOT DEFINED PEM )
 	message( FATAL_ERROR "PEM not defined" )
 endif( )
 
-if( NOT DEFINED KEY_WRAPPED )
-	message( FATAL_ERROR "KEY_WRAPPED not defined" )
+if( NOT DEFINED DATASET_CALLS )
+	message( FATAL_ERROR "DATASETS not defined" )
 endif( )
 
 #
@@ -32,7 +32,7 @@ target_sources( zfsmount
 		${CMAKE_CURRENT_SOURCE_DIR}/main.c
 )
 
-target_link_libraries( zfsmount PRIVATE loadkey zfstools )
+target_link_libraries( zfsmount PRIVATE loadkey zfstools shared )
 
 target_compile_definitions( zfsmount
 	PRIVATE
@@ -41,7 +41,6 @@ target_compile_definitions( zfsmount
 		POOL_VDEVS=${VDEV_STRING}
 		ID_KEY=0x${ID_KEY}
 		"PEM={${PEM_BYTES}}"
-		"KEY_WRAPPED={${KEY_WRAPPED_BYTES}}"
 )
 
 install( TARGETS zfsmount

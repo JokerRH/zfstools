@@ -26,21 +26,6 @@ if( DEFINED PEM )
 	string( REGEX REPLACE ", $" "" PEM_BYTES "${PEM_BYTES}" )
 endif( )
 
-if( DEFINED KEY_WRAPPED )
-	# Convert KEY_WRAPPED string into a C array initializer
-	string( LENGTH "${KEY_WRAPPED}" KEY_WRAPPED_LEN )
-
-	set( KEY_WRAPPED_BYTES "" )
-	math( EXPR MAX_INDEX "${KEY_WRAPPED_LEN}-2" )
-	foreach( I RANGE 0 ${MAX_INDEX} 2 )
-		string( SUBSTRING "${KEY_WRAPPED}" ${I} 2 HEXPAIR )
-		set( KEY_WRAPPED_BYTES "${KEY_WRAPPED_BYTES}0x${HEXPAIR}, " )
-	endforeach( )
-
-	# Remove trailing comma+space
-	string( REGEX REPLACE ", $" "" KEY_WRAPPED_BYTES "${KEY_WRAPPED_BYTES}" )
-endif( )
-
 if( DEFINED POOL_VDEVS )
 	# Convert ":" -> "\0"
 	set( VDEV_STRING "${POOL_VDEVS}" )
@@ -49,6 +34,46 @@ if( DEFINED POOL_VDEVS )
 	set( VDEV_STRING "${VDEV_STRING}\\0" )
 endif( )
 
+if( DEFINED DATASETS )
+	string( REPLACE ":" ";" DATASETS "${DATASETS}" )	#Some tools (e.g. VS Code or yocto) silently escape semicolons. Allow separation using ':', too.
+	set( DATASET_CALLS "" )
+
+	list( LENGTH DATASETS LEN )
+
+	math(EXPR REMAINDER "${LEN} % 3")
+	if( NOT REMAINDER EQUAL 0 )
+		message( FATAL_ERROR "DATASETS must contain a multiple of 3 entries (dataset, wrapped key, writekey path). Currently contains ${LEN} entries.")
+	endif()
+
+	math( EXPR COUNT "${LEN} / 3 - 1" )
+
+	foreach( i RANGE 0 ${COUNT} 1 )
+		math( EXPR idx0 "${i} * 3" )
+		math( EXPR idx1 "${idx0} + 1" )
+		math( EXPR idx2 "${idx0} + 2" )
+
+		list( GET DATASETS ${idx0} DATASET )
+		list( GET DATASETS ${idx1} KEY_WRAPPED )
+		list( GET DATASETS ${idx2} PATH )
+
+		# Convert KEY_WRAPPED string into a C array initializer
+		string( LENGTH "${KEY_WRAPPED}" KEY_WRAPPED_LEN )
+
+		set( KEY_WRAPPED_BYTES "" )
+		math( EXPR MAX_INDEX "${KEY_WRAPPED_LEN}-2" )
+		foreach( I RANGE 0 ${MAX_INDEX} 2 )
+			string( SUBSTRING "${KEY_WRAPPED}" ${I} 2 HEXPAIR )
+			set( KEY_WRAPPED_BYTES "${KEY_WRAPPED_BYTES}0x${HEXPAIR}, " )
+		endforeach( )
+
+		# Remove trailing comma+space
+		string( REGEX REPLACE ", $" "" KEY_WRAPPED_BYTES "${KEY_WRAPPED_BYTES}" )
+
+		string( APPEND DATASET_CALLS "DATASET( \"${DATASET}\", ( (block256_t) \{ ${KEY_WRAPPED_BYTES} \} ), \"${PATH}\" );\n" )
+	endforeach( )
+endif( )
+
+add_subdirectory( shared )
 if( WITH_LOADKEY )
 	add_subdirectory( loadkey )
 endif( )

@@ -10,33 +10,46 @@
 #	include <unistd.h>
 #endif
 
-static block256_t g_ymmKey = { KEY_WRAPPED };
 static const pem_t g_pem = { PEM };
+
+#define DATASET( szDataset, ymmKey, szPath )	if( !WriteKey( ymmKEK, szDataset, ymmKey, szPath ) ) iRet = EXIT_FAILURE;
+
+bool WriteKey( const block256_t ymmKEK, const char *const szDataset, block256_t ymmKey, const char *const szPath )
+{
+	const int fd = open( szPath, O_WRONLY | O_CREAT | O_TRUNC, 0600 );
+	if( fd < 0 )
+	{
+		syslog( LOG_ERR, "Failed to open dataset \"%s\" key output file \"%s\".", szDataset, szPath );
+		return false;
+	}
+
+	YK_Unwrap( &ymmKey, ymmKEK );
+
+	if( write( fd, ymmKey.ab, sizeof( ymmKey ) ) != sizeof( ymmKey ) )
+	{
+		syslog( LOG_ERR, "Failed to write dataset \"%s\" key to output file \"%s\".", szDataset, szPath );
+		close( fd );
+		return false;
+	}
+
+	if( close( fd ) < 0 )
+	{
+		syslog( LOG_ERR, "Failed to close dataset \"%s\" key output file \"%s\".", szDataset, szPath );
+		return false;
+	}
+
+	return true;
+}
 
 int main( int argc, char *argv[ ] )
 {
 	openlog( "writekey", LOG_CONS | LOG_PERROR, LOG_USER );
 	int iRet = EXIT_SUCCESS;
 
-	if( argc < 2 )
-	{
-		syslog( LOG_ERR, "Insufficient arguments. Please provide the file that shall receive the unwrapped binary key." );
-		iRet = EXIT_FAILURE;
-		goto ERROR_AFTER_LOG;
-	}
-
-	const int fd = open( argv[ 1 ], O_WRONLY | O_CREAT | O_TRUNC, 0600 );
-	if( fd < 0 )
-	{
-		syslog( LOG_ERR, "Failed to open output file \"%s\".", argv[ 1 ] );
-		iRet = EXIT_FAILURE;
-		goto ERROR_AFTER_LOG;
-	}
-
 	if( !YK_StartPCSCD( ) )
 	{
 		iRet = EXIT_FAILURE;
-		goto ERROR_AFTER_FILE;
+		goto ERROR_AFTER_LOG;
 	}
 	if( !YK_MakeYubikeyDev( ) )
 	{
@@ -61,21 +74,13 @@ int main( int argc, char *argv[ ] )
 		goto ERROR_AFTER_LOGIN;
 	}
 
-	YK_Unwrap( &g_ymmKey, ymmKEK );
-
-	if( write( fd, g_ymmKey.ab, sizeof( g_ymmKey ) ) != sizeof( g_ymmKey ) )
-	{
-		syslog( LOG_ERR, "Failed to write unwrapped key to output file \"%s\".", argv[ 1 ] );
-		iRet = EXIT_FAILURE;
-		goto ERROR_AFTER_LOGIN;
-	}
+	//Automatically generated DATASET calls
+#	include <shared/datasets.h>
 
 ERROR_AFTER_LOGIN:
 	YK_Logout( &session );
 ERROR_AFTER_PCSCD:
 	YK_StopPCSCD( );
-ERROR_AFTER_FILE:
-	close( fd );
 ERROR_AFTER_LOG:
 	closelog( );
 	return iRet;

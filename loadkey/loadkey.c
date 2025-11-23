@@ -151,6 +151,7 @@ bool YK_LoadPEM( const yksession_t *const pSession, const unsigned char idKey, p
 bool YK_LoadKEK( const yksession_t *const pSession, const unsigned char idKey, const pem_t *const pPEM, block256_t *const pymmKEK )
 {
 #ifdef DEBUG_KEY
+	syslog( LOG_INFO, "Debug mode enabled, providing static KEK!" );
 	*pymmKEK = (block256_t) { DEBUG_KEY };
 	return true;
 #endif

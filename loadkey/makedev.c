@@ -38,6 +38,10 @@ int mkdirp( char *szPath, mode_t mode )
 */
 bool YK_MakeYubikeyDev( void )
 {
+#ifdef DEBUG_KEY
+	return true;
+#endif
+
 	DIR *const pDir = opendir( USB_DEV_ROOT );
 	if( !pDir )
 	{
