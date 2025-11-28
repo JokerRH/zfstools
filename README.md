@@ -55,6 +55,8 @@ This is the id that identifies the certificate slot. It is **not** matching the 
 9e -> 04  
 The value you type will be interpreted as hexadecimal.  
 Example cmake option: -DID_KEY=03
+### DISABLE_ID_CHECK
+If set to **ON**, disables the pool_guid check, importing only based on the pool name. Ensure that you do not have multiple pools with the same name, there is no check for this!
 
 ### PEM
 To derive the KEK, the public key from the Privacy-Enhanced Mail (PEM) file is needed. You can generate it using the keysetup tool. It could be extracted automatically (using loadkey's **YK_LoadPEM**), but is tied to the wrapped key anyways. As such, it was chosen to be hardcoded to reduce runtime error sources.  

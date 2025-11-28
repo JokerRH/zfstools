@@ -124,9 +124,9 @@ static const char *GetVDevName( const char *const szzVDevs, unsigned uVDev )
 /*!
 	\brief Loads the configuration from the VDevs given in \p szzVDevs.
 	\param szzVDevs A list of vdev paths. VDevs are separated with NULL-terminators, the list itself is finalized with a second NULL-terminators (i.e. doubly terminated at the end).
-	\details	Aside from errors that may occur from i/o or kernel communication, the function will purposely fail if a vdev is SPARE, L2CACHE or doesn't belong to the pool \p szPool with id \p idPool.
+	\details	Aside from errors that may occur from i/o or kernel communication, the function will purposely fail if a vdev is SPARE, L2CACHE or doesn't belong to the pool \p szPool with id \p pidPool.
 */
-static bool LoadVDevConfigs( const char *const szzVDevs, const char *const szPool, const uint64_t idPool, const unsigned numVDevs, nvlist_t **const anvl )
+static bool LoadVDevConfigs( const char *const szzVDevs, const char *const szPool, uint64_t *const pidPool, const unsigned numVDevs, nvlist_t **const anvl )
 {
 	//Read all labels
 	vdev_label_t *aLabels;
@@ -294,11 +294,15 @@ ERROR_WHILE_OPENING:
 				goto ERROR_WHILE_UNPACKING;
 			}
 
-			if( idPool != idVDevPool )
+#ifdef DISABLE_ID_CHECK
+			*pidPool = idVDevPool;
+#else
+			if( *pidPool != idVDevPool )
 			{
-				syslog( LOG_ERR, "VDev \"%s\" is a member of pool with id %" PRIu64 ", not %" PRIu64 ".", GetVDevName( szzVDevs, uVDev ), idVDevPool, idPool );
+				syslog( LOG_ERR, "VDev \"%s\" is a member of pool with id %" PRIu64 ", not %" PRIu64 ".", GetVDevName( szzVDevs, uVDev ), idVDevPool, *pidPool );
 				goto ERROR_WHILE_UNPACKING;
 			}
+#endif
 		}
 
 		continue;
@@ -320,11 +324,11 @@ ERROR_WHILE_UNPACKING:
 	\brief	Loads all vdev configurations for the list \p szzVDevs, then creates the pool configuration associated with them.
 	\param szzVDevs A list of vdev paths. VDevs are separated with NULL-terminators, the list itself is finalized with a second NULL-terminators (i.e. doubly terminated at the end).
 */
-static nvlist_t *LoadPoolConfig( const char *const szzVDevs, const char *const szPool, const uint64_t idPool )
+static nvlist_t *LoadPoolConfig( const char *const szzVDevs, const char *const szPool, uint64_t *const pidPool )
 {
 	unsigned numVDevs = CountStrings( szzVDevs );
 	nvlist_t *anvlRedundant[ numVDevs ];
-	if( !LoadVDevConfigs( szzVDevs, szPool, idPool, numVDevs, anvlRedundant ) )
+	if( !LoadVDevConfigs( szzVDevs, szPool, pidPool, numVDevs, anvlRedundant ) )
 		return NULL;
 
 	//At this point, we have one vdev config per physical device. All of these belong to the same pool, but not necessarily describe the same top-level vdev.
@@ -452,7 +456,7 @@ static nvlist_t *LoadPoolConfig( const char *const szzVDevs, const char *const s
 
 		//Copy pool guid
 		{
-			if( nvlist_add_uint64( nvlPool, ZPOOL_CONFIG_POOL_GUID, idPool ) )
+			if( nvlist_add_uint64( nvlPool, ZPOOL_CONFIG_POOL_GUID, *pidPool ) )
 			{
 				syslog( LOG_ERR, "Failed to copy pool pool_guid." );
 				goto ERROR_AFTER_POOL;
@@ -697,7 +701,7 @@ static nvlist_t *LoadPoolConfig( const char *const szzVDevs, const char *const s
 				goto ERROR_AFTER_ROOT;
 			}
 			
-			if( nvlist_add_uint64( nvlRoot, ZPOOL_CONFIG_GUID, idPool ) )
+			if( nvlist_add_uint64( nvlRoot, ZPOOL_CONFIG_GUID, *pidPool ) )
 			{
 				syslog( LOG_ERR, "Failed to set guid of root vdev." );
 				goto ERROR_AFTER_ROOT;
@@ -759,10 +763,10 @@ static unsigned long GetHostID( void )
 /*!
 	\param szzVDevs A list of vdev paths. VDevs are separated with NULL-terminators, the list itself is finalized with a second NULL-terminators (i.e. doubly terminated at the end).
 */
-bool ImportPool( const int fdZFS, const char *const szzVDevs, const char *const szPool, const uint64_t idPool )
+bool ImportPool( const int fdZFS, const char *const szzVDevs, const char *const szPool, uint64_t idPool )
 {
 	//Load the configuration from the vdevs, then perform the first import step (TRYIMPORT)
-	nvlist_t *nvlPool = LoadPoolConfig( szzVDevs, szPool, idPool );
+	nvlist_t *nvlPool = LoadPoolConfig( szzVDevs, szPool, &idPool );
 	if( !nvlPool )
 		return false;
 

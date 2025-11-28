@@ -10,6 +10,7 @@ cmake_dependent_option( WITH_ZFSTOOLS "Build the zfstools library" ON  "NOT WIN3
 cmake_dependent_option( WITH_KEYSETUP "Build the keysetup tool" ON "WITH_LOADKEY" OFF )
 cmake_dependent_option( WITH_WRITEKEY "Build the writekey tool" ON "WITH_LOADKEY" OFF )
 cmake_dependent_option( WITH_ZFSMOUNT "Build the zfsmount tool" ON "WITH_LOADKEY AND WITH_ZFSTOOLS AND NOT WIN32" OFF )
+option( DISABLE_ID_CHECK "Disable check for matching pool_guid" OFF )
 
 if( DEFINED PEM )
 	# Convert PEM string into a C array initializer

@@ -22,6 +22,9 @@ target_sources( zfstools
 
 target_link_libraries( zfstools PUBLIC PkgConfig::ZFS PkgConfig::BLKID )
 target_compile_definitions( zfstools PRIVATE _GNU_SOURCE )
+if( DISABLE_ID_CHECK )
+    target_compile_definitions( zfstools PRIVATE DISABLE_ID_CHECK )
+endif()
 
 install( TARGETS zfstools
 	EXPORT zfstoolsTargets
