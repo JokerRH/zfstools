@@ -1047,6 +1047,26 @@ TRYIMPORT_CONFIG:
 	return nvl;
 }
 
+/*!
+	\param szPath	The path to create. On error, this string is shortened to the subpath that failed.
+*/
+static int mkdirp( char *szPath, mode_t mode )
+{
+	for( char *pSeparator = szPath[ 0 ] == '/' ? szPath + 1 : szPath; *pSeparator; ++pSeparator )
+	{
+		if( pSeparator[ 0 ] != '/' )
+			continue;
+
+		pSeparator[ 0 ] = '\0';
+		if( mkdir( szPath, mode ) && errno != EEXIST )
+			return -1;
+
+		pSeparator[ 0 ] = '/';
+	}
+
+	return mkdir( szPath, mode );
+}
+
 static bool MountDataset( const char *const szDataset, nvlist_t *const nvl, const char *const szAlternateRoot, const size_t lenAlternateRoot, const bool fReadonly )
 {
 	//Ensure that the encryption key (if needed) is loaded
@@ -1291,9 +1311,9 @@ bool MountPool( int fdZFS, const char *const szPool )
 	return true;
 }
 
-bool LoadPoolKey( const char *const szEncryptionRoot, const block256_t ymmKey )
+bool LoadPoolKey( const char *const szEncryptionRoot, const char abKey[ 32 ] )
 {
-	const int iRet = lzc_load_key( szEncryptionRoot, false, (char *) ymmKey.ab, sizeof( ymmKey ) );
+	const int iRet = lzc_load_key( szEncryptionRoot, false, (char *) abKey, 32 );
 	if( iRet )
 	{
 		const char *szError;

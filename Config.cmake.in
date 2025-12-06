@@ -1,0 +1,8 @@
+@PACKAGE_INIT@
+
+find_package( PkgConfig )
+pkg_check_modules( YKCS11 IMPORTED_TARGET ykcs11 )
+pkg_check_modules( ZFS REQUIRED IMPORTED_TARGET libzfs_core )
+pkg_check_modules( BLKID REQUIRED IMPORTED_TARGET blkid )
+
+include("${CMAKE_CURRENT_LIST_DIR}/zfstoolsTargets.cmake")

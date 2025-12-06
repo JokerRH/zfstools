@@ -16,7 +16,7 @@ static const pem_t g_PEM = { PEM };
 static inline bool LoadWrappedKey( const block256_t ymmKEK, const char *const szDataset, block256_t ymmKey )
 {
 	YK_Unwrap( &ymmKey, ymmKEK );
-	return LoadPoolKey( szDataset, ymmKey );
+	return LoadPoolKey( szDataset, ymmKey.ab );
 }
 
 int main( int argc, char *argv[ ] )
