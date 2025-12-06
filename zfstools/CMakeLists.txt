@@ -27,37 +27,9 @@ if( DISABLE_ID_CHECK )
 endif()
 
 install( TARGETS zfstools
-	EXPORT zfstoolsTargets
-	RUNTIME DESTINATION bin COMPONENT ${CMAKE_INSTALL_LIBDIR}
-	LIBRARY DESTINATION lib COMPONENT ${CMAKE_INSTALL_LIBDIR}
-	ARCHIVE DESTINATION lib COMPONENT ${CMAKE_INSTALL_BINDIR}
-	FILE_SET public_headers DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/zfstools
-)
-
-#
-# Packaging
-#
-install( EXPORT zfstoolsTargets
-	FILE zfstoolsTargets.cmake
-	NAMESPACE zfstools::
-	DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/zfstools
-)
-
-configure_package_config_file( "${CMAKE_CURRENT_SOURCE_DIR}/Config.cmake.in"
-	"${CMAKE_CURRENT_BINARY_DIR}/zfstoolsConfig.cmake"
-	INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/zfstools
-)
-
-write_basic_package_version_file(
-	${CMAKE_CURRENT_BINARY_DIR}/zfstoolsConfigVersion.cmake
-	VERSION 0.1.0
-	COMPATIBILITY SameMajorVersion
-)
-
-# Install Config and ConfigVersion files
-install(
-	FILES
-		"${CMAKE_CURRENT_BINARY_DIR}/zfstoolsConfig.cmake"
-		"${CMAKE_CURRENT_BINARY_DIR}/zfstoolsConfigVersion.cmake"
-	DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/zfstools"
+	EXPORT ${ZFSTOOLS_EXPORT_SET}
+	RUNTIME DESTINATION bin
+	LIBRARY DESTINATION lib
+	ARCHIVE DESTINATION lib
+	FILE_SET public_headers DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/zfstools"
 )

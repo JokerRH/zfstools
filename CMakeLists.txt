@@ -1,5 +1,5 @@
 cmake_minimum_required( VERSION 3.10 )
-project( zfstools C )
+project( zfstools LANGUAGES C VERSION 0.1.0 )
 
 include( GNUInstallDirs )
 include( CMakePackageConfigHelpers )
@@ -74,6 +74,46 @@ if( DEFINED DATASETS )
 	endforeach( )
 endif( )
 
+#
+# Prepare package
+#
+set( ZFSTOOLS_EXPORT_SET zfstoolsTargets )
+
+# Export location
+set( ZFSTOOLS_INSTALL_CMAKEDIR "${CMAKE_INSTALL_LIBDIR}/cmake/zfstools" )
+
+# Generate package config files
+configure_package_config_file(
+	"${CMAKE_CURRENT_SOURCE_DIR}/Config.cmake.in"
+	"${CMAKE_CURRENT_BINARY_DIR}/zfstoolsConfig.cmake"
+	INSTALL_DESTINATION ${ZFSTOOLS_INSTALL_CMAKEDIR}
+)
+
+write_basic_package_version_file(
+	"${CMAKE_CURRENT_BINARY_DIR}/zfstoolsConfigVersion.cmake"
+	VERSION ${PROJECT_VERSION}
+	COMPATIBILITY SameMajorVersion
+)
+
+# Install config files
+install(
+	FILES
+		"${CMAKE_CURRENT_BINARY_DIR}/zfstoolsConfig.cmake"
+		"${CMAKE_CURRENT_BINARY_DIR}/zfstoolsConfigVersion.cmake"
+	DESTINATION "${ZFSTOOLS_INSTALL_CMAKEDIR}"
+)
+
+# Install the global export set created by subprojects
+install(
+	EXPORT ${ZFSTOOLS_EXPORT_SET}
+	FILE zfstoolsTargets.cmake
+	NAMESPACE zfstools::
+	DESTINATION "${ZFSTOOLS_INSTALL_CMAKEDIR}"
+)
+
+#
+# Add libraries and executables
+#
 add_subdirectory( shared )
 if( WITH_LOADKEY )
 	add_subdirectory( loadkey )

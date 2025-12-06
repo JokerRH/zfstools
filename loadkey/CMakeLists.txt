@@ -57,37 +57,9 @@ if( DEFINED DEBUG_KEY )
 endif()
 
 install( TARGETS loadkey
-	EXPORT loadkeyTargets
-	RUNTIME DESTINATION bin COMPONENT ${CMAKE_INSTALL_LIBDIR}
-	LIBRARY DESTINATION lib COMPONENT ${CMAKE_INSTALL_LIBDIR}
-	ARCHIVE DESTINATION lib COMPONENT ${CMAKE_INSTALL_BINDIR}
-	FILE_SET public_headers DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/loadkey
-)
-
-#
-# Packaging
-#
-install( EXPORT loadkeyTargets
-	FILE loadkeyTargets.cmake
-	NAMESPACE loadkey::
-	DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/loadkey
-)
-
-configure_package_config_file( "${CMAKE_CURRENT_SOURCE_DIR}/Config.cmake.in"
-	"${CMAKE_CURRENT_BINARY_DIR}/loadkeyConfig.cmake"
-	INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/loadkey
-)
-
-write_basic_package_version_file(
-	${CMAKE_CURRENT_BINARY_DIR}/loadkeyConfigVersion.cmake
-	VERSION 0.1.0
-	COMPATIBILITY SameMajorVersion
-)
-
-# Install Config and ConfigVersion files
-install(
-	FILES
-		"${CMAKE_CURRENT_BINARY_DIR}/loadkeyConfig.cmake"
-		"${CMAKE_CURRENT_BINARY_DIR}/loadkeyConfigVersion.cmake"
-	DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/loadkey"
+	EXPORT ${ZFSTOOLS_EXPORT_SET}
+	RUNTIME DESTINATION bin
+	LIBRARY DESTINATION lib
+	ARCHIVE DESTINATION lib
+	FILE_SET public_headers DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/loadkey"
 )
