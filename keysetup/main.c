@@ -45,7 +45,9 @@ int main( int argc, char *argv[ ] )
 	{
 		CMD_PEM,
 		CMD_WRAP,
-		CMD_UNWRAP
+		CMD_UNWRAP,
+		CMD_CWRAP,
+		CMD_CUNWRAP
 	} eCmd;
 
 	//Initialize syslog for loadkey
@@ -56,6 +58,52 @@ int main( int argc, char *argv[ ] )
 	{
 		fputs( "Insufficient arguments. ", stderr );
 		goto PRINT_ARGS;
+	}
+
+	if( !stricmp( argv[ 1 ], "pem" ) )
+		eCmd = CMD_PEM;
+	else
+	{
+		if( argc < 4 )
+		{
+			fputs( "Insufficient arguments. ", stderr );
+			goto PRINT_ARGS;
+		}
+
+		if( !stricmp( argv[ 1 ], "wrap" ) )
+			eCmd = CMD_WRAP;
+		else if( !stricmp( argv[ 1 ], "unwrap" ) )
+			eCmd = CMD_UNWRAP;
+		else if( !stricmp( argv[ 1 ], "cwrap" ) )
+			eCmd = CMD_CWRAP;
+		else if( !stricmp( argv[ 1 ], "cunwrap" ) )
+			eCmd = CMD_CUNWRAP;
+		else
+		{
+PRINT_ARGS:
+			fputs( "Arguments are:\n\tpem [key id]\n\twrap [key id] [key]\n\tunwrap [key id] [key]\n\tcwrap [kek] [key]\n\tcunwrap [kek] [key]\n", stderr );
+			iRet = EXIT_FAILURE;
+			goto ERROR_AFTER_LOG;
+		}
+	}
+
+	block256_t ymmKEK;
+	block256_t ymmKey;
+	if( eCmd == CMD_CWRAP || eCmd == CMD_CUNWRAP )
+	{
+		if( !ReadKey( &ymmKEK, argv[ 2 ]) )
+		{
+			iRet = EXIT_FAILURE;
+			goto ERROR_AFTER_LOGIN;
+		}
+
+		if( !ReadKey( &ymmKey, argv[ 3 ]) )
+		{
+			iRet = EXIT_FAILURE;
+			goto ERROR_AFTER_LOGIN;
+		}
+
+		goto WRAP_UNWRAP_KEY;
 	}
 
 	unsigned char idKey;
@@ -77,29 +125,6 @@ int main( int argc, char *argv[ ] )
 		}
 
 		idKey = (unsigned char) u;
-	}
-
-	if( !stricmp( argv[ 1 ], "pem" ) )
-		eCmd = CMD_PEM;
-	else
-	{
-		if( argc < 4 )
-		{
-			fputs( "Insufficient arguments. ", stderr );
-			goto PRINT_ARGS;
-		}
-
-		if( !stricmp( argv[ 1 ], "wrap" ) )
-			eCmd = CMD_WRAP;
-		else if( !stricmp( argv[ 1 ], "unwrap" ) )
-			eCmd = CMD_UNWRAP;
-		else
-		{
-PRINT_ARGS:
-			fputs( "Arguments are:\n\tpem [key id]\n\twrap [key id] [key]\n\tunwrap [key id] [key]\n", stderr );
-			iRet = EXIT_FAILURE;
-			goto ERROR_AFTER_LOG;
-		}
 	}
 
 	if( !YK_StartPCSCD( ) )
@@ -139,28 +164,29 @@ PRINT_ARGS:
 	}
 	else
 	{
-		block256_t ymmKey;
 		if( !ReadKey( &ymmKey, argv[ 3 ]) )
 		{
 			iRet = EXIT_FAILURE;
 			goto ERROR_AFTER_LOGIN;
 		}
 
-		block256_t ymmKEK;
 		if( !YK_LoadKEK( &session, idKey, &pem, &ymmKEK ) )
 		{
 			iRet = EXIT_FAILURE;
 			goto ERROR_AFTER_LOGIN;
 		}
 
+WRAP_UNWRAP_KEY:
 		block256_t ymmOut;
 		switch( eCmd )
 		{
 		case CMD_WRAP:
+		case CMD_CWRAP:
 			Decrypt256_256( ymmKey.ab, ymmOut.ab, ymmKEK.ab );
 			fputs( "Wrapped key: ", stdout );
 			break;
 		case CMD_UNWRAP:
+		case CMD_CUNWRAP:
 			Encrypt256_256( ymmKey.ab, ymmOut.ab, ymmKEK.ab );
 			fputs( "Unwrapped key: ", stdout );
 			break;
@@ -174,9 +200,11 @@ PRINT_ARGS:
 	}
 
 ERROR_AFTER_LOGIN:
-	YK_Logout( &session );
+	if( eCmd != CMD_CWRAP && eCmd != CMD_CUNWRAP )
+		YK_Logout( &session );
 ERROR_AFTER_PCSCD:
-	YK_StopPCSCD( );
+	if( eCmd != CMD_CWRAP && eCmd != CMD_CUNWRAP )
+		YK_StopPCSCD( );
 ERROR_AFTER_LOG:
 	closelog( );
 	return iRet;
